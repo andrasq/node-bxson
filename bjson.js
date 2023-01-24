@@ -319,7 +319,7 @@ var data = "foobar";
 var data = {a:1, b:2, c:3, d:4, e:5};
 var data = {a: 1.5, b: "foo", c: [1,2e5,3e10], d: true, e: {f: {}}, g: "barbarbarbarbarbarbarbarbarbar"};
 var data = require('../ell/test/logline.json');
-var data = {foo: data, bar: data, bat: data, baz: data};
+// var data = qibl.populate({}, data , { keys: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'] });
 
 //console.log("AR: data", data);
 var x = encode(data);

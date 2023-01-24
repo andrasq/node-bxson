@@ -133,7 +133,7 @@ PushBuffer.prototype._push = function(/* varargs */) {
 PushBuffer.prototype._growBuf = function(n) {
     if ((this.end + n) > this.capacity) {
         var oldbuf = this.buf;
-        this.capacity = (1.25 * this.capacity + 256 + 1.25 * n) >>> 0;
+        this.capacity = (2 * this.capacity + 256 + 1.25 * n) >>> 0;
         this.buf = this._allocBuf(this.capacity);
         if (oldbuf) for (var i = 0; i < oldbuf.length; i++) this.buf[i] = oldbuf[i];
     }
