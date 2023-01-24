@@ -25,6 +25,11 @@ can only be determined by traversing the contained elements.
 
 'use strict';
 
+module.exports = {
+    encode: encode,
+    decode: decode,
+}
+
 var qibl = require('../qibl');
 var ieeeFloat = require('ieee-float');
 var PushBuffer = require('./pushbuf');
@@ -92,9 +97,9 @@ var MASK_BYTETYPE = 0xFC;
 var T_STR8      = 0x90;         // 100100xx
 var T_STR16     = 0x90 + 1;
 var T_STR32     = 0x90 + 2;
-var T_BLOB8     = 0x94;         // 100101xx
-var T_BLOB16    = 0x94 + 1;
-var T_BLOB32    = 0x94 + 2;
+var T_BYTES8    = 0x94;         // 100101xx
+var T_BYTES16   = 0x94 + 1;
+var T_BYTES32   = 0x94 + 2;
 var T_ARRAY8    = 0x98;         // 100110xx
 var T_ARRAY16   = 0x98 + 1;
 var T_ARRAY32   = 0x98 + 2;
@@ -108,7 +113,7 @@ var TYPE_IMMILEN = 0xC0;
 var MASK_IMMILEN = 0x0F;
 var MASK_IMMITYPE = 0xF0;
 var T_STRC      = 0xC0 + 0;     // 1100xxxx
-var T_BLOBC     = 0xD0 + 0;     // 1101xxxx
+var T_BYTESC    = 0xD0 + 0;     // 1101xxxx
 var T_ARRAYC    = 0xE0 + 0;     // 1110xxxx
 var T_OBJECTC   = 0xF0 + 0;     // 1111xxxx
 
@@ -134,7 +139,7 @@ function encodeItem( buf, item ) {
         else switch (item.constructor) {
         case Array:     encodeArray(buf, item); break;
         case Date:      encodeItem(buf, item.toISOString()); break;
-        case Buffer:    encodeBlob(buf, item); break;
+        case Buffer:    encodeBytes(buf, item); break;
         case Boolean: case Number: case String:
                         encodeItem(buf, item.valueOf()); break;
         default:        encodeObject(buf, item); break;
@@ -164,11 +169,12 @@ function decodeItem( buf ) {
         case T_FLOAT32: case T_FLOAT64:
             return decodeNumber(buf, type);
         }
+/**/
     case TYPE_BYTELEN:
         var len = buf.shift(1 << (type & MASK_BYTELEN)); // 0..3 meaning 1, 2, 4 or 8
         switch (type & MASK_BYTETYPE) {
         case T_STR8: return decodeString(buf, len);
-        case T_BLOB8: return decodeBlob(buf, len);
+        case T_BYTES8: return decodeBytes(buf, len);
         case T_ARRAY8: return decodeArray(buf, len);
         case T_OBJECT8: return decodeObject(buf, len);
         }
@@ -176,7 +182,7 @@ function decodeItem( buf ) {
         var len = type & MASK_IMMILEN; // 0..15 embedded into the type code
         switch (type & MASK_IMMITYPE) {
         case T_STRC: return decodeString(buf, len);
-        case T_BLOBC: return decodeBlob(buf, len);
+        case T_BYTESC: return decodeBytes(buf, len);
         case T_ARRAYC: return decodeArray(buf, len);
         case T_OBJECTC: return decodeObject(buf, len);
         }
@@ -278,16 +284,14 @@ function decodeObject( buf, len ) {
     return obj;
 }
 
-function encodeBlob( buf, item ) {
+function encodeBytes( buf, item ) {
     var mark = buf.end, len = item.length;
-    encodeLength(buf, len, T_BLOBC, T_BLOB8);
-    buf.pushBlob(item);
-//    buf._growBuf(len);
-//    for (var base = buf.end, i = 0; i < len; i++) buf[base + i] = item[i];
+    encodeLength(buf, len, T_BYTESC, T_BYTES8);
+    buf.pushBytes(item);
 }
 
-function decodeBlob( buf, len ) {
-    return buf.shiftBlob(len);
+function decodeBytes( buf, len ) {
+    return buf.shiftBytes(len);
 }
 
 // /** quicktest:

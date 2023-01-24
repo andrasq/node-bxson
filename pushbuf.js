@@ -92,14 +92,14 @@ PushBuffer.prototype.pushString = function pushString(str) {
 PushBuffer.prototype.shiftString = function shiftString( len ) {
     return qutf8.decodeUtf8(this.buf, this.pos, this.pos += len);
 }
-PushBuffer.prototype.pushBlob = function pushBlob( bytes ) {
+PushBuffer.prototype.pushBytes = function pushBytes( bytes ) {
     var len = bytes.length;
     this._growBuf(len);
     for (var buf = this.buf, base = this.end, i = 0; i < len; i++) buf[base + i] = bytes[i];
     this.end += i;
 console.log("AR: buf", buf);
 }
-PushBuffer.prototype.shiftBlob = function shiftBlob( len ) {
+PushBuffer.prototype.shiftBytes = function shiftBytes( len ) {
     return this.buf.slice(this.pos, this.pos += len);
 }
 PushBuffer.prototype.slice = function slice(base, bound) {
