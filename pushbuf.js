@@ -113,8 +113,9 @@ PushBuffer.prototype.slice = function slice(base, bound) {
 // lone surrogate (not part of a valid pair) is encoded into 3 bytes as codepoint FFFD, handled by the (> 0x7FF) case
 // TODO: back-port this version into q-utf8 -- but NOTE: this inlined version is 6% faster than q-utf8
 // return qutf8.byteLength(s); 1.8m/s
-PushBuffer.byteLength = function byteLength(s) {
+PushBuffer.byteLength = function byteLength( s ) {
     var len = s.length;
+    if (len > 100) return Buffer.byteLength(s);
     for (var code, code2, i = 0; i < s.length; i++) {
         if ((code = s.charCodeAt(i)) > 0x7F) len += 1 + +(code > 0x7FF);
         if (code >= 0xD800 && code < 0xDC00) {

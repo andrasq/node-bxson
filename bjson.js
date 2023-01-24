@@ -112,6 +112,7 @@ var T_OBJECT32  = 0x9C + 2;
 var TYPE_IMMILEN = 0xC0;
 var MASK_IMMILEN = 0x0F;
 var MASK_IMMITYPE = 0xF0;
+var MASK_IS_IMMILEN = 0x40;
 var T_STRC      = 0xC0 + 0;     // 1100xxxx
 var T_BYTESC    = 0xD0 + 0;     // 1101xxxx
 var T_ARRAYC    = 0xE0 + 0;     // 1110xxxx
@@ -157,9 +158,9 @@ function encodeItem( buf, item ) {
 function decodeItem( buf ) {
     var type = buf.shift(1);
     switch (type & TYPE_MASK) {
-    case TYPE_IMMEDIATE:
+    case TYPE_IMMEDIATE:        // 00xxxxxx
         return (type & MASK_IMMEDIATE) << 26 >> 26;
-    case TYPE_FIXLEN:
+    case TYPE_FIXLEN:           // 01xxxxxx
         switch (type) {
         case T_NULL: return null;
         case T_UNDEFINED: return undefined;
@@ -170,7 +171,7 @@ function decodeItem( buf ) {
             return decodeNumber(buf, type);
         }
 /**/
-    case TYPE_BYTELEN:
+    case TYPE_BYTELEN:          // 10xxxxxx
         var len = buf.shift(1 << (type & MASK_BYTELEN)); // 0..3 meaning 1, 2, 4 or 8
         switch (type & MASK_BYTETYPE) {
         case T_STR8: return decodeString(buf, len);
@@ -178,7 +179,7 @@ function decodeItem( buf ) {
         case T_ARRAY8: return decodeArray(buf, len);
         case T_OBJECT8: return decodeObject(buf, len);
         }
-    case TYPE_IMMILEN:
+    case TYPE_IMMILEN:          // 11xxxxxx
         var len = type & MASK_IMMILEN; // 0..15 embedded into the type code
         switch (type & MASK_IMMITYPE) {
         case T_STRC: return decodeString(buf, len);
