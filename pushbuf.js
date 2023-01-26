@@ -12,13 +12,6 @@ var fromBuf = eval('parseFloat(process.versions.node) > 6 ? Buffer.from : Buffer
 
 module.exports = PushBuffer;
 
-// var xutf8 = require('utf8'); // generates wrong code for 'abc\u1234'
-// var qutf8 = require('../q-utf8/utf8');
-
-/*
- * Automatically growing buffers, like arrays.  Utf8 encoding and byteLength from q-utf8.
- * Note that varargs is much much slower (6x) if a named arg is also declared.
- */
 function PushBuffer( bytes ) {
     this.capacity = 0;
     this.buf = bytes || null;
@@ -26,6 +19,8 @@ function PushBuffer( bytes ) {
     this.pos = 0;
     this._allocBuf = allocBuf;
 }
+
+// Note that varargs is much much slower (6x) if a named arg is also declared.
 PushBuffer.prototype.push = function push(/* byte, byte, ... */) {
     var len = arguments.length, si = 0, buf;
     this._growBuf(len);
@@ -42,10 +37,58 @@ PushBuffer.prototype.push = function push(/* byte, byte, ... */) {
         break;
     }
 }
+// NOTE: time passing single argument and having separate push1, push2, push3, push5 functions
+PushBuffer.prototype.pushRev = function pushLE(/* byte, byte, ... */) {
+    var len = arguments.length, si = arguments.length, buf;
+    this._growBuf(len);
+    buf = this.buf;
+    switch (len) {
+    case 5: buf[this.end++] = arguments[--si] & 0xff;
+    case 4: buf[this.end++] = arguments[--si] & 0xff;
+    case 3: buf[this.end++] = arguments[--si] & 0xff;
+    case 2: buf[this.end++] = arguments[--si] & 0xff;
+    case 1: buf[this.end++] = arguments[--si] & 0xff;
+        break;
+    default:
+        for (var i = arguments.length - 1; i >= 0; i++) buf[this.end++] = arguments[si] & 0xff;
+        break;
+    }
+}
 PushBuffer.prototype.poke = function(/* ,varargs */) {
     var end = arguments[0], buf = this.buf;
     for (var i = 1; i < arguments.length; i++) buf[end++] = arguments[i] & 0xff;
 }
+// FIXME: use n = (n * 256) + buf[this.pos++] for integers > 32 bits
+// FIXME: tricky to recover a signed 64-bit integer because cannot use >> to sign-extend
+PushBuffer.prototype.shiftBE = function shiftBE( n ) {
+    var val = 0, buf = this.buf;
+    switch (n) {
+    default: throw new Error('cannot shift ' + n);
+    case 4: return buf[this.pos++] << 24 | buf[this.pos++] << 16 | buf[this.pos++] << 8 | buf[this.pos++];
+    case 3: return buf[this.pos++] << 16 | buf[this.pos++] << 8 | buf[this.pos++];
+    case 2: return buf[this.pos++] << 8 | buf[this.pos++];
+    case 1: return buf[this.pos++];
+/**
+    case 4: val = (val << 8) | buf[this.pos++];
+    case 3: val = (val << 8) | buf[this.pos++];
+    case 2: val = (val << 8) | buf[this.pos++];
+    case 1: val = (val << 8) | buf[this.pos++];
+**/
+    }
+    return val;
+}
+PushBuffer.prototype.shiftLE = function shiftLE( n ) {
+    var val = 0, buf = this.buf;
+    switch (n) {
+    default: throw new Error('cannot shift ' + n);
+    case 4: return buf[this.pos++] | buf[this.pos++] << 8 | buf[this.pos++] << 16 | buf[this.pos++] << 24;
+    case 3: return buf[this.pos++] | buf[this.pos++] << 8 | buf[this.pos++] << 16;
+    case 2: return buf[this.pos++] | buf[this.pos++] << 8;
+    case 1: return buf[this.pos++];
+    }
+    return val;
+}
+
 // little-endian variable-length integer
 PushBuffer.prototype.pushVarint = function pushVarint( v ) {
     this._growBuf(10);
@@ -53,25 +96,13 @@ PushBuffer.prototype.pushVarint = function pushVarint( v ) {
     // store explicit zeros
     do { buf[this.end++] = v & 0x7f; v /= 128 } while (v > 1);
 }
-// FIXME: use n = (n * 256) + buf[this.pos++] for integers > 32 bits
-// FIXME: tricky to recover a signed 64-bit integer because cannot use >> to sign-extend
-PushBuffer.prototype.shift = function shift( n ) {
-    var val = 0, buf = this.buf;
-    switch (n) {
-    default: throw new Error('cannot shift ' + n);
-    case 4: val = (val << 8) | buf[this.pos++];
-    case 3: val = (val << 8) | buf[this.pos++];
-    case 2: val = (val << 8) | buf[this.pos++];
-    case 1: val = (val << 8) | buf[this.pos++];
-    }
-    return val;
-}
 PushBuffer.prototype.shiftVarint = function shiftVarint( ) {
     var v = 0, ch, buf = this.buf;
     while ((ch = buf[this.pos]) <= 0x7f) { v = v * 128 + ch; this.pos++ }
     return v;
 }
 
+// Utf8 encoding and byteLength from q-utf8.
 PushBuffer.prototype.pushString = function pushString(str, len) {
     if (!len) len = PushBuffer.guessByteLength(str);
     if (this.end + len > this.capacity) this._growBuf(len);
@@ -136,22 +167,11 @@ PushBuffer.prototype.shiftString = function shiftString( len ) {
         return str;
     }
 }
-
-PushBuffer.prototype.pushBytes = function pushBytes( bytes ) {
-    var len = bytes.length;
-    this._growBuf(len);
-    for (var buf = this.buf, base = this.end, i = 0; i < len; i++) buf[base + i] = bytes[i];
-    this.end += i;
-console.log("AR: buf", buf);
-}
-PushBuffer.prototype.shiftBytes = function shiftBytes( len ) {
-    return this.buf.slice(this.pos, this.pos += len);
-}
-PushBuffer.prototype.slice = function slice(base, bound) {
-//    var buf = this._allocBuf(this.end);
-//    for (var i=0; i<this.end; i++) buf[i] = this.buf[i];
-//    return buf;
-    return this.buf.slice(base || 0, bound || this.end);
+PushBuffer.guessByteLength = function guessByteLength(s) {
+    var len = s.length;
+    if (len > 100) return Buffer.byteLength(s);
+    for (var i=0; i<s.length; i++) s.charCodeAt(i) > 0x7F ? len += 3 : 0;
+    return len;
 }
 // string byte length
 // valid surrogate pair encodes 2 chars into 4 bytes (two codes, D800-DBFF followed by DC00-DFFF)
@@ -169,11 +189,23 @@ PushBuffer.byteLength = function byteLength( s ) {
     }
     return len;
 }
-PushBuffer.guessByteLength = function guessByteLength(s) {
-    var len = s.length;
-    if (len > 100) return Buffer.byteLength(s);
-    for (var i=0; i<s.length; i++) s.charCodeAt(i) > 0x7F ? len += 3 : 0;
-    return len;
+
+PushBuffer.prototype.pushBytes = function pushBytes( bytes ) {
+    var len = bytes.length;
+    this._growBuf(len);
+    for (var buf = this.buf, base = this.end, i = 0; i < len; i++) buf[base + i] = bytes[i];
+    this.end += i;
+console.log("AR: buf", buf);
+}
+PushBuffer.prototype.shiftBytes = function shiftBytes( len ) {
+    return this.buf.slice(this.pos, this.pos += len);
+}
+
+PushBuffer.prototype.slice = function slice(base, bound) {
+//    var buf = this._allocBuf(this.end);
+//    for (var i=0; i<this.end; i++) buf[i] = this.buf[i];
+//    return buf;
+    return this.buf.slice(base || 0, bound || this.end);
 }
 
 PushBuffer.prototype._growBuf = function(n) {

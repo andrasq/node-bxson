@@ -67,6 +67,7 @@ The stored length is the size of the payload; the blob is length + 5 bytes total
 **/
 
 var TYPE_MASK   = 0xC0;
+var TYPE_SHIFT  = 6;
 
 // immediate integers -32..31
 var TYPE_IMMEDIATE = 0x00;
@@ -81,42 +82,43 @@ var TYPE_FIXLEN = 0x40;
 var T_NULL      = 0x40;         // 01000000
 var T_UNDEFINED = 0x41;
 var T_FALSE     = 0x42;
-var T_TRUE      = 0x43;
+var T_TRUE      = 0x43;         // T_FALSE | 1
 var T_INT8      = 0x44;         // 010001xx
 var T_INT16     = 0x45;
 var T_INT32     = 0x46;
 var T_INT64     = 0x47;
+var T_INTV      = 0x48;         // experimental: positive variable-length int
+var T_NEGINTV   = 0x49;
 var T_FLOAT32   = 0x4E;
 var T_FLOAT64   = 0x4F;
 
-// length-counted types (up to 16)
+// indirectly length-counted types (up to 16)
 // note that the length-16 and -32 are always 1 and 2 more than length-8 (mask 0x03)
 var TYPE_BYTELEN = 0x80;
 var MASK_BYTELEN = 0x03;
-var MASK_BYTETYPE = 0xFC;
-var T_STR8      = 0x90;         // 100100xx
-var T_STR16     = 0x90 + 1;
-var T_STR32     = 0x90 + 2;
-var T_BYTES8    = 0x94;         // 100101xx
-var T_BYTES16   = 0x94 + 1;
-var T_BYTES32   = 0x94 + 2;
-var T_ARRAY8    = 0x98;         // 100110xx
-var T_ARRAY16   = 0x98 + 1;
-var T_ARRAY32   = 0x98 + 2;
-var T_OBJECT8   = 0x9C;         // 100111xx
-var T_OBJECT16  = 0x9C + 1;
-var T_OBJECT32  = 0x9C + 2;
+var T_STR8      = 0x80;         // 10<00>00xx
+var T_STR16     = 0x80 + 1;
+var T_STR32     = 0x80 + 2;
+var T_BYTES8    = 0x90;         // 10<01>00xx
+var T_BYTES16   = 0x90 + 1;
+var T_BYTES32   = 0x90 + 2;
+var T_ARRAY8    = 0xA0;         // 10<10>00xx
+var T_ARRAY16   = 0xA0 + 1;
+var T_ARRAY32   = 0xA0 + 2;
+var T_OBJECT8   = 0xB0;         // 10<11>00xx
+var T_OBJECT16  = 0xB0 + 1;
+var T_OBJECT32  = 0xB0 + 2;
 
-// immediate-length types (up to 4)
+// directly length-counted "immediate-length" types (up to 4)
 // FIXME: fix the type/mask naming! type_lengthC vs mask_length_type vs mask_length_length
 var TYPE_IMMILEN = 0xC0;
 var MASK_IMMILEN = 0x0F;
 var MASK_IMMITYPE = 0xF0;
 var MASK_IS_IMMILEN = 0x40;
-var T_STRC      = 0xC0 + 0;     // 1100xxxx
-var T_BYTESC    = 0xD0 + 0;     // 1101xxxx
-var T_ARRAYC    = 0xE0 + 0;     // 1110xxxx
-var T_OBJECTC   = 0xF0 + 0;     // 1111xxxx
+var T_STRC      = 0xC0 + 0;     // 11<00>xxxx
+var T_BYTESC    = 0xD0 + 0;     // 11<01>xxxx
+var T_ARRAYC    = 0xE0 + 0;     // 11<10>xxxx
+var T_OBJECTC   = 0xF0 + 0;     // 11<11>xxxx
 
 
 function encode( item ) {
@@ -138,12 +140,20 @@ function encodeItem( buf, item ) {
     case 'object':
         if (item === null) buf.push(T_NULL);
         else switch (item.constructor) {
+        case Object:
+            // it is faster to walk the keys twice than to call Object.keys
+            var len = 0; for (var key in item) len += 1;
+            encodeLength(buf, len, T_OBJECTC, T_OBJECT8);
+            for (var key in item) encodeString(buf, key), encodeItem(buf, item[key]);
+            break;
         case Array:     encodeArray(buf, item); break;
-        case Date:      encodeItem(buf, item.toISOString()); break;
+        case Date:      encodeString(buf, item.toISOString()); break;
         case Buffer:    encodeBytes(buf, item); break;
-        case Boolean: case Number: case String:
+        case Boolean:
+        case Number:
+        case String:
                         encodeItem(buf, item.valueOf()); break;
-        default:        encodeObject(buf, item); break;
+        default:        item.toJSON ? encodeItem(buf, item.toJSON()) : encodeObject(buf, item); break;
         }
         break;
     default: // bigint (exception), symbol (undef), function (undef)
@@ -156,81 +166,80 @@ function encodeItem( buf, item ) {
 }
 
 function decodeItem( buf ) {
-    var type = buf.shift(1);
-    switch (type & TYPE_MASK) {
-    case TYPE_IMMEDIATE:        // 00xxxxxx
-        return (type & MASK_IMMEDIATE) << 26 >> 26;
-    case TYPE_FIXLEN:           // 01xxxxxx
-        switch (type) {
-        case T_NULL: return null;
-        case T_UNDEFINED: return undefined;
-        case T_FALSE: return false;
-        case T_TRUE: return true;
-        case T_INT8: case T_INT16: case T_INT32: case T_INT64:
-        case T_FLOAT32: case T_FLOAT64:
-            return decodeNumber(buf, type);
+    var type = buf.shiftBE(1);
+    switch (type >>> 6) {
+    case 0:     // 00 <xxxxxx>
+        return (type & 0x3F) << 26 >> 26;
+    case 1:     // 01 00<tttt>
+        if ((type & 0x0F) < 10) switch (type & 0x0F) {
+        case 0: return null;
+        case 1: return undefined;
+        case 2: return false;
+        case 3: return true;
+        case 4: return buf.shiftBE(1) << 24 >> 24;
+        case 5: return buf.shiftBE(2) << 16 >> 16;
+        case 6: return buf.shiftBE(4) >> 0;
+        case 7: throw new Error('int64 not supported');
+        case 8: return buf.shiftVarint();
+        case 9: return -buf.shiftVarint();
+        } else {
+            if (type === T_FLOAT64) return ieeeFloat.readDoubleBE(buf.buf, (buf.pos += 8) - 8);
+            if (type === T_FLOAT32) return ieeeFloat.readFloatBE(buf.buf, (buf.pos += 4) - 4);
+            throw new Error(type + ': unknown type');
         }
-/**/
-    case TYPE_BYTELEN:          // 10xxxxxx
-        var len = buf.shift(1 << (type & MASK_BYTELEN)); // 0..3 meaning 1, 2, 4 or 8
-        switch (type & MASK_BYTETYPE) {
-        case T_STR8: return decodeString(buf, len);
-        case T_BYTES8: return decodeBytes(buf, len);
-        case T_ARRAY8: return decodeArray(buf, len);
-        case T_OBJECT8: return decodeObject(buf, len);
-        }
-    case TYPE_IMMILEN:          // 11xxxxxx
-        var len = type & MASK_IMMILEN; // 0..15 embedded into the type code
-        switch (type & MASK_IMMITYPE) {
-        case T_STRC: return decodeString(buf, len);
-        case T_BYTESC: return decodeBytes(buf, len);
-        case T_ARRAYC: return decodeArray(buf, len);
-        case T_OBJECTC: return decodeObject(buf, len);
+    case 2:     // 10 <tt>00<xx>
+        var len = buf.shiftBE(1 << (type & 0x3)); // 0..3 meaning 1, 2, 4 or 8
+        // fall through
+    case 3:     // 11 <tt><xxxx>
+        len = len ? len : type & 0xF; // length 0..15 in the type
+        switch ((type >>> 4) & 3) {
+        case 0: return buf.shiftString(len);
+        case 1: return buf.shiftBytes(len);
+        case 2: return decodeArray(buf, len);
+        case 3: return decodeObject(buf, len);
         }
     }
 }
 
-// we arranged the type ids so that type16 and type32 can be computed from type8
+// type16 and type32 can be computed from type8 by adding 1 and 2
+// encoding is 10% faster if not using immediate counts
 function encodeLength( buf, len, typeC, type8 ) {
-    if (len <= MASK_IMMILEN) buf.push(typeC + len);
-    else if (len < 256) buf.push(type8, len);
-    else if (len < 65536) buf.push(type8 + 1, len >> 8, len);
-    else buf.push(type8 + 2, len >> 24, len >> 16, len >> 8, len);
+    if (len < 256) {
+        //if (len <= MASK_IMMILEN) buf.push(typeC + len);
+        //else
+        buf.push(type8, len);
+    } else {
+        if (len < 65536) buf.push(type8 + 1, len >> 8, len);
+        else buf.push(type8 + 2, len >> 24, len >> 16, len >> 8, len);
+        //if (len < 65536) buf.push(type8 + 1, len, len >> 8);
+        //else buf.push(type8 + 2, len, len >>= 8, len >>= 8, len >>= 8);
+    }
 }
 
-function decodeLength( buf, type ) {
-    if ((type & TYPE_MASK) === TYPE_IMMILEN) return type & MASK_IMMILEN;
-    else return buf.shift(1 << (type & MASK_BYTELEN));
-}
-
+// predefined-length ints are faster to encode and to decode that varints
 function encodeNumber( buf, item ) {
     if ((item | 0) !== item) {
         buf.push(T_FLOAT64);
         ieeeFloat.writeDoubleBE(buf.buf, item, buf.end);
         buf.end += 8;
-    }
-    else if (item >= -IMMED_RANGE && item < IMMED_RANGE) buf.push(T_INTC + (item & MASK_IMMEDIATE));
-    else if (item >= -128 && item < 128) buf.push(T_INT8, item);
-    else if (item >= -32768 && item < 32768) buf.push(T_INT16, item >> 8, item);
-    else buf.push(T_INT32, item >> 24, item >> 16, item >> 8, item);
-}
-
-function decodeNumber( buf, type ) {
-    // immediates are handled in decodeItem
-    if (type === T_FLOAT64) return ieeeFloat.readDoubleBE(buf.buf, (buf.pos += 8) - 8);
-    else if (type === T_FLOAT32) return ieeeFloat.readFloatBE(buf.buf, (buf.pos += 4) - 4);
-    else switch (type & MASK_BYTELEN) {
-    case 0: return buf.shift(1) << 24 >> 24; break;
-    case 1: return buf.shift(2) << 16 >> 16; break;
-    case 2: return buf.shift(4) >> 0;
-    case 3: throw new Error('int64 not supported');
+    } else {
+        if (item >= -128 && item < 128) {
+            //if (item >= -IMMED_RANGE && item < IMMED_RANGE) buf.push(T_INTC + (item & MASK_IMMEDIATE));
+            //else
+            buf.push(T_INT8, item);
+        } else {
+            if (item >= -32768 && item < 32768) buf.push(T_INT16, item >> 8, item);
+            else buf.push(T_INT32, item >> 24, item >> 16, item >> 8, item);
+            //if (item >= -32768 && item < 32768) buf.push(T_INT16, item, item >> 8);
+            //else buf.push(T_INT32, item, item >>= 8, item >>= 8, item >>= 8);
+        }
     }
 }
 
 function encodeString( buf, item ) {
     var len = PushBuffer.byteLength(item);
     encodeLength(buf, len, T_STRC, T_STR8);
-    buf.pushString(item);
+    buf.pushString(item, len);
 }
 
 function decodeString( buf, len ) {
@@ -286,7 +295,7 @@ function decodeObject( buf, len ) {
 }
 
 function encodeBytes( buf, item ) {
-    var mark = buf.end, len = item.length;
+    var len = item.length;
     encodeLength(buf, len, T_BYTESC, T_BYTES8);
     buf.pushBytes(item);
 }
@@ -295,7 +304,7 @@ function decodeBytes( buf, len ) {
     return buf.shiftBytes(len);
 }
 
-// /** quicktest:
+/** quicktest:
 
 var fromBuf = parseFloat(process.versions.node) > '7' ? Buffer.from : Buffer;
 
@@ -311,6 +320,7 @@ var msgpackjs_pack = msgpackjs.pack; msgpackjs.pack = function(v){ return fromBu
 
 // var x = encode({aaa: [1,2,3], b: "ABC"});
 // console.log("AR: got", x);
+console.log("AR: decoded to", decode(x));
 
 var data = {a: 1.5, b: "foo", c: [1,2], d: true, e: {}};
 //var data = {a: 1.5, b: "foo", c: [1,2], d: true, e: {}};
@@ -325,6 +335,7 @@ var data = {a:1, b:2, c:3, d:4, e:5};
 var data = {a: 1.5, b: "foo", c: [1,2e5,3e10], d: true, e: {f: {}}, g: "barbarbarbarbarbarbarbarbarbar"};
 var data = require('../ell/test/logline.json');
 // var data = qibl.populate({}, data , { keys: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'] });
+// var data = qibl.populate(new Array(1000), data);
 
 //console.log("AR: data", data);
 var x = encode(data);
@@ -336,22 +347,22 @@ for (var i=0; i<3; i++) {
     var slen = s.length;
     var target = [];
 if (0) {
-    timeit(100000, function() { x = utf8.encode(s) });
-    timeit(100000, function() { x = qutf8.encode(s, 0, slen, [], 0) });
-    timeit(100000, function() { x = qutf8b.write([], 0, s, 0, slen, false) });
+    timeit(.15, function() { x = utf8.encode(s) });
+    timeit(.15, function() { x = qutf8.encode(s, 0, slen, [], 0) });
+    timeit(.15, function() { x = qutf8b.write([], 0, s, 0, slen, false) });
 console.log("AR:", x);
 }
 
-    timeit(100000, function() { x1 = encode(data)         });
-    timeit(100000, function() { x2 = qbson.encode(data)   });
-    timeit(100000, function() { x3 = msgpackjs.pack(data) });
-    timeit(100000, function() { x4 = JSON.stringify(data) });
+    timeit(.15, function() { x1 = encode(data)         });
+    timeit(.15, function() { x2 = qbson.encode(data)   });
+    timeit(.15, function() { x3 = msgpackjs.pack(data) });
+    timeit(.15, function() { x4 = JSON.stringify(data) });
 console.log("AR: encoded", x1.length, x2.length, x3.length, x4.length);
 
-    timeit(100000, function() { x = decode(x1)           });
-    timeit(100000, function() { x = qbson.decode(x2)     });
-    timeit(100000, function() { x = msgpackjs.unpack(x3) });
-    timeit(100000, function() { x = JSON.parse(x4)       });
+    timeit(.15, function() { x = decode(x1)           });
+    timeit(.15, function() { x = qbson.decode(x2)     });
+    timeit(.15, function() { x = msgpackjs.unpack(x3) });
+    timeit(.15, function() { x = JSON.parse(x4)       });
 console.log("AR: decoded");
 }
 
