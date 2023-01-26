@@ -13,7 +13,7 @@ var fromBuf = eval('parseFloat(process.versions.node) > 6 ? Buffer.from : Buffer
 module.exports = PushBuffer;
 
 // var xutf8 = require('utf8'); // generates wrong code for 'abc\u1234'
-var qutf8 = require('../q-utf8/utf8');
+// var qutf8 = require('../q-utf8/utf8');
 
 /*
  * Automatically growing buffers, like arrays.  Utf8 encoding and byteLength from q-utf8.
@@ -27,9 +27,10 @@ function PushBuffer( bytes ) {
     this._allocBuf = allocBuf;
 }
 PushBuffer.prototype.push = function push(/* byte, byte, ... */) {
-    this._growBuf(arguments.length);
-    var si = 0, buf = this.buf;
-    switch (arguments.length) {
+    var len = arguments.length, si = 0, buf;
+    this._growBuf(len);
+    buf = this.buf;
+    switch (len) {
     case 5: buf[this.end++] = arguments[si++] & 0xff;
     case 4: buf[this.end++] = arguments[si++] & 0xff;
     case 3: buf[this.end++] = arguments[si++] & 0xff;
@@ -40,6 +41,17 @@ PushBuffer.prototype.push = function push(/* byte, byte, ... */) {
         for (var i = 0; i < arguments.length; i++) buf[this.end++] = arguments[i] & 0xff;
         break;
     }
+}
+PushBuffer.prototype.poke = function(/* ,varargs */) {
+    var end = arguments[0], buf = this.buf;
+    for (var i = 1; i < arguments.length; i++) buf[end++] = arguments[i] & 0xff;
+}
+// little-endian variable-length integer
+PushBuffer.prototype.pushVarint = function pushVarint( v ) {
+    this._growBuf(10);
+    var buf = this.buf;
+    // store explicit zeros
+    do { buf[this.end++] = v & 0x7f; v /= 128 } while (v > 1);
 }
 // FIXME: use n = (n * 256) + buf[this.pos++] for integers > 32 bits
 // FIXME: tricky to recover a signed 64-bit integer because cannot use >> to sign-extend
@@ -54,9 +66,18 @@ PushBuffer.prototype.shift = function shift( n ) {
     }
     return val;
 }
-PushBuffer.prototype.pushString = function pushString(str) {
-    if (this.end + 3 * str.length > this.capacity) this._growBuf(PushBuffer.byteLength(str));
-    if (str.length <= 100 || !Buffer.isBuffer(this.buf)) {
+PushBuffer.prototype.shiftVarint = function shiftVarint( ) {
+    var v = 0, ch, buf = this.buf;
+    while ((ch = buf[this.pos]) <= 0x7f) { v = v * 128 + ch; this.pos++ }
+    return v;
+}
+
+PushBuffer.prototype.pushString = function pushString(str, len) {
+    if (!len) len = PushBuffer.guessByteLength(str);
+    if (this.end + len > this.capacity) this._growBuf(len);
+    if (len > 100) {
+        this.end += this.buf.write(str, this.end, 'utf8');
+    } else {
         // utf8 encoding extracted from q-utf8
         var buf = this.buf, ix = this.end;
         for (var len = str.length, i = 0; i < len; i++) {
@@ -85,13 +106,37 @@ PushBuffer.prototype.pushString = function pushString(str) {
         }
         this.end = ix;
     }
-    else {
-        this.end += this.buf.write(str, this.end, 'utf8');
+}
+
+PushBuffer.prototype.shiftString = function shiftString( len ) {
+    if (len > 100) {
+        return this.buf.toString(undefined, this.pos, this.pos += len)
+    } else {
+        var charcodes = [];
+        // return decodeUtf8(this.buf, this.pos, this.pos += len);
+        // decode utf8 adapted from q-utf8 0.1.4
+        var ch, ch2, ch3, ch4, str = "", code, buf = this.buf, base = this.pos, bound = this.pos += len;
+        for (var i=base; i<bound; i++) {
+            ch = buf[i];
+            if (ch < 0x80) {
+                str += String.fromCharCode(ch);
+            } else if (ch < 0xC0) {
+                str += '\uFFFD'; // invalid multi-byte start (continuation byte)
+            } else if (ch < 0xE0 && (ch2 = buf[i+1]) < 0xC0 && i+1 < bound) {
+                str += String.fromCharCode(((ch & 0x1F) <<  6) + (ch2 & 0x3F)), i += 1;
+            } else if ((ch < 0xF0) && (ch2 = buf[i+1]) < 0xC0 && (ch3 = buf[i+2]) < 0xC0 && i+2 < bound) {
+                str += String.fromCharCode(((ch & 0x0F) << 12) + ((ch2 & 0x3F) << 6) + (ch3 & 0x3F)), i += 2;
+            } else if (ch < 0xF8 && (ch2 = buf[i+1]) < 0xC0 && (ch3 = buf[i+2]) < 0xC0 && (ch4 = buf[i+3]) < 0xC0 && i+3 < bound) {
+                var codepoint = ((ch & 0x07) << 18) + ((ch2 & 0x3f) << 12) + ((ch3 & 0x3f) << 6) + (ch4 & 0x3f);
+                return String.fromCharCode(0xD800 + ((codepoint - 0x10000) >> 10))
+                     + String.fromCharCode(0xDC00 + ((codepoint - 0x10000) & 0x3FF));
+            }
+            else charcodes.push(0xFFFD), str += '\ufffd';
+        }
+        return str;
     }
 }
-PushBuffer.prototype.shiftString = function shiftString( len ) {
-    return qutf8.decodeUtf8(this.buf, this.pos, this.pos += len);
-}
+
 PushBuffer.prototype.pushBytes = function pushBytes( bytes ) {
     var len = bytes.length;
     this._growBuf(len);
@@ -124,13 +169,13 @@ PushBuffer.byteLength = function byteLength( s ) {
     }
     return len;
 }
-PushBuffer.prototype._poke = function(/* ,varargs */) {
-    var end = arguments[0], buf = this.buf;
-    for (var i = 1; i < arguments.length; i++) buf[end++] = arguments[i] & 0xff;
+PushBuffer.guessByteLength = function guessByteLength(s) {
+    var len = s.length;
+    if (len > 100) return Buffer.byteLength(s);
+    for (var i=0; i<s.length; i++) s.charCodeAt(i) > 0x7F ? len += 3 : 0;
+    return len;
 }
-PushBuffer.prototype._push = function(/* varargs */) {
-    for (var i = 0; i < arguments.length; i++) this.buf[this.end++] = arguments[i] & 0xff;
-}
+
 PushBuffer.prototype._growBuf = function(n) {
     if ((this.end + n) > this.capacity) {
         var oldbuf = this.buf;
