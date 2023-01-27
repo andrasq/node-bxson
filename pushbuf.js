@@ -14,45 +14,19 @@ module.exports = PushBuffer;
 
 function PushBuffer( bytes ) {
     this.capacity = 0;
-    this.buf = bytes || null;
-    this.end = bytes ? bytes.length : 0;
+    this.buf = bytes;
     this.pos = 0;
-    this._allocBuf = allocBuf;
+    this.end = bytes ? bytes.length : 0;
 }
 
 // Note that varargs is much much slower (6x) if a named arg is also declared.
+// a switch() jump table is not as fast as a for loop
+// FIXME: time vs passing single argument and having separate push1, push2, push3, push5 functions
 PushBuffer.prototype.push = function push(/* byte, byte, ... */) {
     var len = arguments.length, si = 0, buf;
     this._growBuf(len);
     buf = this.buf;
-    switch (len) {
-    case 5: buf[this.end++] = arguments[si++] & 0xff;
-    case 4: buf[this.end++] = arguments[si++] & 0xff;
-    case 3: buf[this.end++] = arguments[si++] & 0xff;
-    case 2: buf[this.end++] = arguments[si++] & 0xff;
-    case 1: buf[this.end++] = arguments[si++] & 0xff;
-        break;
-    default:
-        for (var i = 0; i < arguments.length; i++) buf[this.end++] = arguments[i] & 0xff;
-        break;
-    }
-}
-// NOTE: time passing single argument and having separate push1, push2, push3, push5 functions
-PushBuffer.prototype.pushRev = function pushLE(/* byte, byte, ... */) {
-    var len = arguments.length, si = arguments.length, buf;
-    this._growBuf(len);
-    buf = this.buf;
-    switch (len) {
-    case 5: buf[this.end++] = arguments[--si] & 0xff;
-    case 4: buf[this.end++] = arguments[--si] & 0xff;
-    case 3: buf[this.end++] = arguments[--si] & 0xff;
-    case 2: buf[this.end++] = arguments[--si] & 0xff;
-    case 1: buf[this.end++] = arguments[--si] & 0xff;
-        break;
-    default:
-        for (var i = arguments.length - 1; i >= 0; i++) buf[this.end++] = arguments[si] & 0xff;
-        break;
-    }
+    for (var i = 0; i < len; i++) buf[this.end++] = arguments[i] & 0xff;
 }
 PushBuffer.prototype.poke = function(/* ,varargs */) {
     var end = arguments[0], buf = this.buf;
@@ -65,15 +39,9 @@ PushBuffer.prototype.shiftBE = function shiftBE( n ) {
     switch (n) {
     default: throw new Error('cannot shift ' + n);
     case 4: return buf[this.pos++] << 24 | buf[this.pos++] << 16 | buf[this.pos++] << 8 | buf[this.pos++];
-    case 3: return buf[this.pos++] << 16 | buf[this.pos++] << 8 | buf[this.pos++];
-    case 2: return buf[this.pos++] << 8 | buf[this.pos++];
+    case 3: return buf[this.pos++] << 16 | buf[this.pos++] <<  8 | buf[this.pos++];
+    case 2: return buf[this.pos++] <<  8 | buf[this.pos++];
     case 1: return buf[this.pos++];
-/**
-    case 4: val = (val << 8) | buf[this.pos++];
-    case 3: val = (val << 8) | buf[this.pos++];
-    case 2: val = (val << 8) | buf[this.pos++];
-    case 1: val = (val << 8) | buf[this.pos++];
-**/
     }
     return val;
 }
@@ -85,7 +53,14 @@ PushBuffer.prototype.shiftLE = function shiftLE( n ) {
     case 3: return buf[this.pos++] | buf[this.pos++] << 8 | buf[this.pos++] << 16;
     case 2: return buf[this.pos++] | buf[this.pos++] << 8;
     case 1: return buf[this.pos++];
+/**
+    case 4: val |= buf[this.pos + 3] << 24;
+    case 3: val |= buf[this.pos + 2] << 16;
+    case 2: val |= buf[this.pos + 1] << 8;
+    case 1: val |= buf[this.pos + 0];
+**/
     }
+    this.pos += n;
     return val;
 }
 
@@ -195,24 +170,20 @@ PushBuffer.prototype.pushBytes = function pushBytes( bytes ) {
     this._growBuf(len);
     for (var buf = this.buf, base = this.end, i = 0; i < len; i++) buf[base + i] = bytes[i];
     this.end += i;
-console.log("AR: buf", buf);
 }
 PushBuffer.prototype.shiftBytes = function shiftBytes( len ) {
     return this.buf.slice(this.pos, this.pos += len);
 }
 
 PushBuffer.prototype.slice = function slice(base, bound) {
-//    var buf = this._allocBuf(this.end);
-//    for (var i=0; i<this.end; i++) buf[i] = this.buf[i];
-//    return buf;
     return this.buf.slice(base || 0, bound || this.end);
 }
 
-PushBuffer.prototype._growBuf = function(n) {
+PushBuffer.prototype._growBuf = function _growBuf( n ) {
     if ((this.end + n) > this.capacity) {
         var oldbuf = this.buf;
-        this.capacity = (2 * this.capacity + 256 + 1.25 * n) >>> 0;
-        this.buf = this._allocBuf(this.capacity);
+        this.capacity = (2 * this.capacity + 256 + 1.00 * n) >>> 0;
+        this.buf = allocBuf(this.capacity);
         if (oldbuf) for (var i = 0; i < oldbuf.length; i++) this.buf[i] = oldbuf[i];
     }
 }
