@@ -32,29 +32,33 @@ PushBuffer.prototype.poke = function(/* ,varargs */) {
     var end = arguments[0], buf = this.buf;
     for (var i = 1; i < arguments.length; i++) buf[end++] = arguments[i] & 0xff;
 }
-// FIXME: use n = (n * 256) + buf[this.pos++] for integers > 32 bits
 // FIXME: tricky to recover a signed 64-bit integer because cannot use >> to sign-extend
 PushBuffer.prototype.shiftBE = function shiftBE( n ) {
     var val = 0, buf = this.buf;
     switch (n) {
-    default: throw new Error('cannot shift ' + n);
-    case 4: return buf[this.pos++] << 24 | buf[this.pos++] << 16 | buf[this.pos++] << 8 | buf[this.pos++];
+    case 4: return buf[this.pos++] * 256 + (buf[this.pos++] << 16 | buf[this.pos++] << 8 | buf[this.pos++]);
     case 3: return buf[this.pos++] << 16 | buf[this.pos++] <<  8 | buf[this.pos++];
     case 2: return buf[this.pos++] <<  8 | buf[this.pos++];
     case 1: return buf[this.pos++];
+    default:
+        for (var i=0; i<n; i++) { val = val * 256 + buf[this.pos++] }
+        return val;
     }
     return val;
 }
 PushBuffer.prototype.shiftLE = function shiftLE( n ) {
     var val = 0, buf = this.buf;
     switch (n) {
-    default: throw new Error('cannot shift ' + n);
-    case 4: return buf[this.pos++] | buf[this.pos++] << 8 | buf[this.pos++] << 16 | buf[this.pos++] << 24;
+    case 4: return (buf[this.pos++] | buf[this.pos++] << 8 | buf[this.pos++] << 16) + buf[this.pos++] * 256;
     case 3: return buf[this.pos++] | buf[this.pos++] << 8 | buf[this.pos++] << 16;
     case 2: return buf[this.pos++] | buf[this.pos++] << 8;
     case 1: return buf[this.pos++];
+    default:
+        for (var i=n-1; i>=0; i++) { val = val * 256 + buf[this.pos + i] }
+        this.pos += n;
+        return val;
 /**
-    case 4: val |= buf[this.pos + 3] << 24;
+    case 4: val += buf[this.pos + 3] * 256;
     case 3: val |= buf[this.pos + 2] << 16;
     case 2: val |= buf[this.pos + 1] << 8;
     case 1: val |= buf[this.pos + 0];

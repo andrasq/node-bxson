@@ -1,0 +1,43 @@
+
+{
+  "name" : "MyTestApp",
+  "hostname" : "server",
+  "pid" : 12345,
+  "audit" : true,
+  "level" : "info",
+  "remoteAddress" : "127.0.0.1",
+  "remotePort" : 54321,
+  "req_id" : "-",
+  "req" : {
+    "method" : "GET",
+    "url" : "/status",
+    "headers" : {
+      "host" : "localhost:1337"
+    },
+    "httpVersion" : "1.1",
+    "trailers" : {
+    },
+    "version" : "1.0.0",
+    "timers" : {
+    }
+  },
+  "res" : {
+    "statusCode" : 200,
+    "trailer" : false
+  },
+  "rusage" : {
+    "utime" : 0.0001,
+    "stime" : 0.00008,
+    "wtime" : 0.00018252001609653234,
+    "maxrss" : 321,
+    "inblock" : 0,
+    "oublock" : 0
+  },
+  "query" : null,
+  "latency" : null,
+  "_audit" : true,
+  "msg" : "handled: 200",
+  "time" : "2015-01-15T05:04:55.114Z",
+  "v" : 0,
+  "requestId" : "-"
+}

@@ -20,6 +20,14 @@ bxjson -- compact json-like binary serialization
 `bxjson` serializes arrays and objects using a variable-length encoding, the end of the data
 can only be determined by traversing the contained elements.
 
+TODO:
+- time optimal utf8 encode/decode tradeoff length
+- time unified vs split encodeLength vs encodeNumber
+- time unified vs split uint/negint types
+- try to use pushbuf in qbson too (instead of calculating size)
+- try new typecodes that put type in 5 lsbitss and omits str16 et al,
+  uses a 1-bit flag for "short" 1- or "long" 4-byte lengths 
+
 ----------------------------------------------------------------
 **/
 
@@ -83,16 +91,20 @@ var T_NULL      = 0x40;         // 01000000
 var T_UNDEFINED = 0x41;
 var T_FALSE     = 0x42;
 var T_TRUE      = 0x43;         // T_FALSE | 1
-var T_INT8      = 0x44;         // 010001xx
-var T_INT16     = 0x45;
-var T_INT32     = 0x46;
-var T_INT64     = 0x47;
-var T_INTV      = 0x48;         // experimental: positive variable-length int
-var T_NEGINTV   = 0x49;
+var T_UINT8     = 0x44;         // 010001xx
+var T_UINT16    = 0x44 + 1;
+var T_UINT32    = 0x44 + 2;
+var T_UINT64    = 0x44 + 3;
+var T_NEGINT8   = 0x48;
+var T_NEGINT16  = 0x48 + 1;
+var T_NEGINT32  = 0x48 + 2;
+var T_NEGINT64  = 0x48 + 3;
+var T_INTV      = 0x4C;         // experimental: positive variable-length int
+var T_NEGINTV   = 0x4D;
 var T_FLOAT32   = 0x4E;
 var T_FLOAT64   = 0x4F;
 
-// indirectly length-counted types (up to 16)
+// indirectly specified length-bytes types (up to 16)
 // note that the length-16 and -32 are always 1 and 2 more than length-8 (mask 0x03)
 var TYPE_BYTELEN = 0x80;
 var MASK_BYTELEN = 0x03;
@@ -109,12 +121,13 @@ var T_OBJECT8   = 0xB0;         // 10<11>00xx
 var T_OBJECT16  = 0xB0 + 1;
 var T_OBJECT32  = 0xB0 + 2;
 
-// directly length-counted "immediate-length" types (up to 4)
+// directly specified "immediate-length" types (up to 4)
 // FIXME: fix the type/mask naming! type_lengthC vs mask_length_type vs mask_length_length
 var TYPE_IMMILEN = 0xC0;
 var MASK_IMMILEN = 0x0F;
 var MASK_IMMITYPE = 0xF0;
 var MASK_IS_IMMILEN = 0x40;
+// FIXME: no need for strC, unlikely to have short buffers
 var T_STRC      = 0xC0 + 0;     // 11<00>xxxx
 var T_BYTESC    = 0xD0 + 0;     // 11<01>xxxx
 var T_ARRAYC    = 0xE0 + 0;     // 11<10>xxxx
@@ -160,7 +173,7 @@ function encodeItem( buf, item ) {
         // hack: convert any unrecognized types to null (sort of like JSON in arrays;
         // JSON converts unknowns to undefined, which are omitted from objects)
         // buf.push(T_NULL); break;
-        if (item === undefined) buf.push(T_UNDEFINED); break;
+        // if (item === undefined) { buf.push(T_UNDEFINED); break; }
         buf.push(T_UNDEFINED); break;
     }
 }
@@ -169,26 +182,35 @@ function decodeItem( buf ) {
     var type = buf.shiftBE(1);
     switch (type >>> 6) {
     case 0:     // 00 <xxxxxx>
+        // inlined signed twos-complement integer
         return (type & 0x3F) << 26 >> 26;
     case 1:     // 01 00<tttt>
-        if ((type & 0x0F) < 10) switch (type & 0x0F) {
+        if (type <= 0x4F) switch (type & 0x0F) {
         case 0: return null;
         case 1: return undefined;
         case 2: return false;
         case 3: return true;
-        case 4: return buf.shiftBE(1) << 24 >> 24;
-        case 5: return buf.shiftBE(2) << 16 >> 16;
-        case 6: return buf.shiftBE(4) >> 0;
-        case 7: throw new Error('int64 not supported');
-        case 8: return buf.shiftVarint();
-        case 9: return -buf.shiftVarint();
+        //case 4: return buf.shiftBE(1) << 24 >> 24;
+        //case 5: return buf.shiftBE(2) << 16 >> 16;
+        //case 6: return buf.shiftBE(4) >> 0;
+        case 4: return buf.shiftBE(1);
+        case 5: return buf.shiftBE(2);
+        case 6: return buf.shiftBE(4);
+        case 7: return buf.shiftBE(8);
+        case 8: return -buf.shiftBE(1);
+        case 9: return -buf.shiftBE(2);
+        case 10: return -buf.shiftBE(4);
+        case 11: return -buf.shiftBE(8);
+        //case 12: return buf.shiftVarint();
+        //case 13: return -buf.shiftVarint();
+        case 14: return ieeeFloat.readFloatBE(buf.buf, (buf.pos += 4) - 4);
+        case 15: return ieeeFloat.readDoubleBE(buf.buf, (buf.pos += 8) - 8);
         } else {
-            if (type === T_FLOAT64) return ieeeFloat.readDoubleBE(buf.buf, (buf.pos += 8) - 8);
-            if (type === T_FLOAT32) return ieeeFloat.readFloatBE(buf.buf, (buf.pos += 4) - 4);
-            throw new Error(type + ': unknown type');
+            throw new Error(type + ': not supported');
         }
     case 2:     // 10 <tt>00<xx>
         var len = buf.shiftBE(1 << (type & 0x3)); // 0..3 meaning 1, 2, 4 or 8
+        //var len = buf.shiftBE(1 << (type & 0x2)); // 0,2 meaning 1 or 4
         // fall through
     case 3:     // 11 <tt><xxxx>
         len = len ? len : type & 0xF; // length 0..15 in the type
@@ -202,15 +224,15 @@ function decodeItem( buf ) {
 }
 
 // type16 and type32 can be computed from type8 by adding 1 and 2
-// encoding is 10% faster if not using immediate counts
+// faster to encode to immediate-length types than length-bytes types
 function encodeLength( buf, len, typeC, type8 ) {
     if (len < 256) {
-        //if (len <= MASK_IMMILEN) buf.push(typeC + len);
-        //else
+        (len <= MASK_IMMILEN) ? buf.push(typeC + len) :
         buf.push(type8, len);
     } else {
         if (len < 65536) buf.push(type8 + 1, len >> 8, len);
         else buf.push(type8 + 2, len >> 24, len >> 16, len >> 8, len);
+        // for little-endian lengths:
         //if (len < 65536) buf.push(type8 + 1, len, len >> 8);
         //else buf.push(type8 + 2, len, len >>= 8, len >>= 8, len >>= 8);
     }
@@ -218,14 +240,28 @@ function encodeLength( buf, len, typeC, type8 ) {
 
 // predefined-length ints are faster to encode and to decode that varints
 function encodeNumber( buf, item ) {
-    if ((item | 0) !== item) {
+    if ((item | 0) !== item || 1/item === -Infinity) {
         buf.push(T_FLOAT64);
         ieeeFloat.writeDoubleBE(buf.buf, item, buf.end);
         buf.end += 8;
-    } else {
+    }
+//    else if (item >= -IMMED_RANGE && item < IMMED_RANGE) {
+//        // encode as an immediate twos-complement integer
+//        buf.push(T_INTC + (item & MASK_IMMEDIATE));
+//    }
+    else {
+        // encode sign and magnitude separately
+        var msb, type8 = (item < 0) ? (item = -item, T_NEGINT8) : T_UINT8;
+        if (item <= 0xffff) {
+            ((item & 0xff00) === 0) ? buf.push(type8, item) : buf.push(type8 + 1, item >> 8, item);
+        } else {
+            var msb = item / 0x100000000;
+            (item <= 0xffffffff) ? buf.push(type8 + 2, item >> 24, item >> 16, item >> 8, item) :
+            (buf.push(type8 + 3, msb >> 24, msb >> 16, msb >> 8, msb), buf.push(item >> 24, item >> 16, item >> item, item));
+        }
+/**
         if (item >= -128 && item < 128) {
-            //if (item >= -IMMED_RANGE && item < IMMED_RANGE) buf.push(T_INTC + (item & MASK_IMMEDIATE));
-            //else
+            // (item >= -IMMED_RANGE && item < IMMED_RANGE) ? buf.push(T_INTC + (item & MASK_IMMEDIATE)) :
             buf.push(T_INT8, item);
         } else {
             if (item >= -32768 && item < 32768) buf.push(T_INT16, item >> 8, item);
@@ -233,6 +269,7 @@ function encodeNumber( buf, item ) {
             //if (item >= -32768 && item < 32768) buf.push(T_INT16, item, item >> 8);
             //else buf.push(T_INT32, item, item >>= 8, item >>= 8, item >>= 8);
         }
+**/
     }
 }
 
@@ -240,10 +277,6 @@ function encodeString( buf, item ) {
     var len = PushBuffer.byteLength(item);
     encodeLength(buf, len, T_STRC, T_STR8);
     buf.pushString(item, len);
-}
-
-function decodeString( buf, len ) {
-    return buf.shiftString(len);
 }
 
 function encodeArray( buf, item ) {
@@ -261,6 +294,7 @@ function decodeArray( buf, len ) {
 }
 
 function encodeObject( buf, item ) {
+/**
     if (item.toJSON) { item = item.toJSON(); delete item.toJSON; return encodeItem(buf, item) }
     if (item.constructor === Object) {
         var len = 0;
@@ -273,16 +307,16 @@ function encodeObject( buf, item ) {
         }
     }
     else {
+**/
         // Object.keys runs slow on older node
         var keys = Object.keys(item), len = keys.length;
-        for (var i = 0; i < keys.length; i++) if (keys[i] === undefined) len -= 1;
         encodeLength(buf, len, T_OBJECTC, T_OBJECT8);
         for (var i = 0; i < keys.length; i++) {
             var key = keys[i];
             encodeItem(buf, key);
             encodeItem(buf, item[key]);
         }
-    }
+//    }
 }
 
 function decodeObject( buf, len ) {
@@ -300,9 +334,6 @@ function encodeBytes( buf, item ) {
     buf.pushBytes(item);
 }
 
-function decodeBytes( buf, len ) {
-    return buf.shiftBytes(len);
-}
 
 /** quicktest:
 
@@ -318,9 +349,9 @@ var qbson = require('../qbson');
 var msgpackjs = require('msgpackjs') // but fix to return buffers
 var msgpackjs_pack = msgpackjs.pack; msgpackjs.pack = function(v){ return fromBuf(msgpackjs_pack(v)) }
 
-// var x = encode({aaa: [1,2,3], b: "ABC"});
+var x = encode({aaa: [1,2,3], b: "ABC"});
 // console.log("AR: got", x);
-console.log("AR: decoded to", decode(x));
+console.log("AR: decoded to", x.length, decode(x));
 
 var data = {a: 1.5, b: "foo", c: [1,2], d: true, e: {}};
 //var data = {a: 1.5, b: "foo", c: [1,2], d: true, e: {}};
@@ -332,9 +363,9 @@ var data = [1,2];
 var data = {a:1};
 var data = "foobar";
 var data = {a:1, b:2, c:3, d:4, e:5};
-var data = {a: 1.5, b: "foo", c: [1,2e5,3e10], d: true, e: {f: {}}, g: "barbarbarbarbarbarbarbarbarbar"};
-var data = require('../ell/test/logline.json');
-// var data = qibl.populate({}, data , { keys: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'] });
+var data = {a: 1.5, b: "foo", c: [-1,2e5,3e10], d: true, e: {f: {}}, g: "barbarbarbarbarbarbarbarbarbar"};
+var data = require('./logline.json');
+var data = qibl.populate({}, data , { keys: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'] });
 // var data = qibl.populate(new Array(1000), data);
 
 //console.log("AR: data", data);
@@ -366,10 +397,10 @@ console.log("AR: encoded", x1.length, x2.length, x3.length, x4.length);
 console.log("AR: decoded");
 }
 
-assert.deepEqual(qibl.toArray(encode(123)), [T_INT8, 123]);
-assert.deepEqual(qibl.toArray(encode(-123)), [T_INT8, -123 & 0xff]);
-// assert.deepEqual(qibl.toArray(encode([1,2,3])), [T_ARRAYC + 3, T_INT8, 1, T_INT8, 2, T_INT8, 3]);
-assert.deepEqual(qibl.toArray(encode([1,-2,3])), [T_ARRAYC + 3, T_INTC + 1, T_INTC + 0x3e, T_INTC + 3]);
+//assert.deepEqual(qibl.toArray(encode(123)), [T_UINT8, 123]);
+//assert.deepEqual(qibl.toArray(encode(-123)), [T_NEGINT8, 123]);
+//// assert.deepEqual(qibl.toArray(encode([1,2,3])), [T_ARRAYC + 3, T_UINT8, 1, T_UINT8, 2, T_UINT8, 3]);
+//assert.deepEqual(qibl.toArray(encode([1,-2,3])), [T_ARRAYC + 3, T_UINTC + 1, T_INTC + 0x3e, T_UINTC + 3]);
 
 //
 // 2023-01-21: 55% faster and 25% smaller than JSON.stringify (node-v13.8.0)

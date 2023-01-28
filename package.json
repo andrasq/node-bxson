@@ -1,5 +1,11 @@
 {
   "name": "bxjson",
-  "version": "0.0.2",
-  "main": "bjson"
+  "version": "0.0.3",
+  "main": "bjson",
+
+  "scripts": {
+    "test": "qnit test-*",
+    "coverage": "nyc -r text -r lcov qnit test-*",
+    "clean": "rm -rf .nyc_output coverage npm-debug.log"
+  }
 }
