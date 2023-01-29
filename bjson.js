@@ -36,7 +36,7 @@ var PushBuffer = require('./pushbuf');
 var TYPE_MASK   = 0xC0;
 var TYPE_SHIFT  = 6;
 
-// 00: immediate integers -32..31
+// 00: immediate-value integers -32..31
 var TYPE_IMMEDIATETYPE = 0x00;
 var MASK_IMMEDIATE = 0x3F;                      // 6 bits signed 2-s complement
 var IMMED_RANGE = (MASK_IMMEDIATE >> 1) + 1;    // -32 .. 31
@@ -115,7 +115,7 @@ function encodeItem( buf, item ) {
         case Object:
             // it is faster to walk the keys twice than to call Object.keys
             var len = 0; for (var key in item) len += 1;
-            encodeLength(buf, len, T_OBJECTC, T_OBJECT8);
+            encodeType(buf, len, T_OBJECTC, T_OBJECT8);
             for (var key in item) encodeString(buf, key), encodeItem(buf, item[key]);
             break;
         case Array:     encodeArray(buf, item); break;
@@ -184,17 +184,18 @@ function decodeItem( buf ) {
 
 // type16 and type32 can be computed from type8 by adding 1 and 2
 // faster to encode to immediate-length types than length-bytes types
-function encodeLength( buf, len, typeC, type8 ) {
+// faster to split encodeType from encodeLenCode, even if only ever call encodeType
+function encodeLenCode( buf, len, type8 ) {
     if (len < 256) {
-        (len <= MASK_SHORTLEN) ? buf.push(typeC + len) :
         buf.push(type8, len);
     } else {
         if (len < 65536) buf.push(type8 + 1, len >> 8, len);
         else buf.push(type8 + 2, len >> 24, len >> 16, len >> 8, len);
-        // for little-endian lengths:
-        //if (len < 65536) buf.push(type8 + 1, len, len >> 8);
-        //else buf.push(type8 + 2, len, len >>= 8, len >>= 8, len >>= 8);
     }
+}
+function encodeType( buf, len, typeC, type8 ) {
+    if (len <= MASK_SHORTLEN) buf.push(typeC + len);
+    else encodeLenCode(buf, len, type8);
 }
 
 // predefined-length ints are faster to encode and to decode that varints
@@ -234,13 +235,19 @@ function encodeNumber( buf, item ) {
 
 function encodeString( buf, item ) {
     var len = PushBuffer.byteLength(item);
-    encodeLength(buf, len, T_STRC, T_STR8);
+    encodeType(buf, len, T_STRC, T_STR8);
     buf.pushString(item, len);
+}
+
+function encodeBytes( buf, item ) {
+    var len = item.length;
+    encodeType(buf, len, T_BYTESC, T_BYTES8);
+    buf.pushBytes(item);
 }
 
 function encodeArray( buf, item ) {
     var len = item.length;
-    encodeLength(buf, len, T_ARRAYC, T_ARRAY8);
+    encodeType(buf, len, T_ARRAYC, T_ARRAY8);
     for (var i = 0; i < len; i++) {
         encodeItem(buf, item[i]);
     }
@@ -260,7 +267,7 @@ function encodeObject( buf, item ) {
         // it is faster to walk the keys twice than to call Object.keys
         // but not faster to encodeString() the key
         for (var key in item) len += 1;
-        encodeLength(buf, len, T_OBJECTC, T_OBJECT8);
+        encodeType(buf, len, T_OBJECTC, T_OBJECT8);
         for (var key in item) {
             encodeItem(buf, key), encodeItem(buf, item[key]);
         }
@@ -269,7 +276,7 @@ function encodeObject( buf, item ) {
 **/
         // Object.keys runs slow on older node
         var keys = Object.keys(item), len = keys.length;
-        encodeLength(buf, len, T_OBJECTC, T_OBJECT8);
+        encodeType(buf, len, T_OBJECTC, T_OBJECT8);
         for (var i = 0; i < keys.length; i++) {
             var key = keys[i];
             encodeItem(buf, key);
@@ -285,12 +292,6 @@ function decodeObject( buf, len ) {
         obj[key] = decodeItem(buf);
     }
     return obj;
-}
-
-function encodeBytes( buf, item ) {
-    var len = item.length;
-    encodeLength(buf, len, T_BYTESC, T_BYTES8);
-    buf.pushBytes(item);
 }
 
 
