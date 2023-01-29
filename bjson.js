@@ -36,37 +36,38 @@ var PushBuffer = require('./pushbuf');
 var TYPE_MASK   = 0xC0;
 var TYPE_SHIFT  = 6;
 
-// immediate integers -32..31
-var TYPE_IMMEDIATE = 0x00;
-var MASK_IMMEDIATE = 0x3F;                      // 6 bits
-var MASK_IMMEDIATEYTPE = ~MASK_IMMEDIATE & 0xff;
+// 00: immediate integers -32..31
+var TYPE_IMMEDIATETYPE = 0x00;
+var MASK_IMMEDIATE = 0x3F;                      // 6 bits signed 2-s complement
 var IMMED_RANGE = (MASK_IMMEDIATE >> 1) + 1;    // -32 .. 31
-var T_INTC      = 0x00 + 0;     // 00Sxxxxx
+var T_INTC      = 0x00 + 0;     // 00xxxxxx     // 2-s complement signed 6-bit integer -32..31
 
-// fixed-length types (up to 64)
+// 01: fixed-length types (64 total)
 // note that the integer types are arranged so that length-16 and -32 are 1 and 2 more than length-8 (mask 0x03)
-var TYPE_FIXLEN = 0x40;
+var TYPE_FIXTYPE = 0x40;
+var TYPE_FIXCODE = 0x3F;
 var T_NULL      = 0x40;         // 01000000
-var T_UNDEFINED = 0x41;
-var T_FALSE     = 0x42;
-var T_TRUE      = 0x43;         // T_FALSE | 1
+var T_UNDEFINED = 0x41;         // 01000001
+var T_FALSE     = 0x42;         // 01000010
+var T_TRUE      = 0x43;         // 01000011 = T_FALSE | 1
 var T_UINT8     = 0x44;         // 010001xx
 var T_UINT16    = 0x44 + 1;
 var T_UINT32    = 0x44 + 2;
 var T_UINT64    = 0x44 + 3;
-var T_NEGINT8   = 0x48;
+var T_NEGINT8   = 0x48;         // 010010xx
 var T_NEGINT16  = 0x48 + 1;
 var T_NEGINT32  = 0x48 + 2;
 var T_NEGINT64  = 0x48 + 3;
-var T_INTV      = 0x4C;         // experimental: positive variable-length int
-var T_NEGINTV   = 0x4D;
-var T_FLOAT32   = 0x4E;
-var T_FLOAT64   = 0x4F;
+var T_INTV      = 0x4C;         // 01001100 experimental positive variable-length int
+var T_NEGINTV   = 0x4D;         // 01001101 experimental negative varint
+var T_FLOAT32   = 0x4E;         // 01001110
+var T_FLOAT64   = 0x4F;         // 01001111
+// 48 other codes unassigned    // 01tttttt
 
-// indirectly specified length-bytes types (up to 16)
+// 10: indirectly specified length-counted types with length in the following bytes (16 total)
 // note that the length-16 and -32 are always 1 and 2 more than length-8 (mask 0x03)
-var TYPE_BYTELEN = 0x80;
-var MASK_BYTELEN = 0x03;
+var TYPE_LENTYPE = 0x80;
+var MASK_LENCODE = 0x03;
 var T_STR8      = 0x80;         // 10<00>00xx
 var T_STR16     = 0x80 + 1;
 var T_STR32     = 0x80 + 2;
@@ -79,13 +80,12 @@ var T_ARRAY32   = 0xA0 + 2;
 var T_OBJECT8   = 0xB0;         // 10<11>00xx
 var T_OBJECT16  = 0xB0 + 1;
 var T_OBJECT32  = 0xB0 + 2;
+// 12 other codes unassigned    // 10<tttt>xx
 
-// directly specified "immediate-length" types (up to 4)
+// 11: directly specified "immediate-length" types (4 total)
 // FIXME: fix the type/mask naming! type_lengthC vs mask_length_type vs mask_length_length
-var TYPE_IMMILEN = 0xC0;
-var MASK_IMMILEN = 0x0F;
-var MASK_IMMITYPE = 0xF0;
-var MASK_IS_IMMILEN = 0x40;
+var MASK_SHORTLENTYPE = 0xF0;
+var MASK_SHORTLEN = 0x0F;
 // FIXME: no need for strC, unlikely to have short buffers
 var T_STRC      = 0xC0 + 0;     // 11<00>xxxx
 var T_BYTESC    = 0xD0 + 0;     // 11<01>xxxx
@@ -143,8 +143,8 @@ function decodeItem( buf ) {
     case 0:     // 00 <xxxxxx>
         // inlined signed twos-complement integer
         return (type & 0x3F) << 26 >> 26;
-    case 1:     // 01 00<tttt>
-        switch (type & 0x3F) {
+    case 1:     // 01 00<tttt>, TYPE_FIXTYPE
+        switch (type & 0x3f) {
         case 0: return null;
         case 1: return undefined;
         case 2: return false;
@@ -167,11 +167,11 @@ function decodeItem( buf ) {
         default:
             throw new Error(type + ': not supported');
         }
-    case 2:     // 10 <tt>00<xx>
-        var len = buf.shiftBE(1 << (type & 0x3)); // 0..3 meaning 1, 2, 4 or 8
+    case 2:     // 10 <tt>00<xx>, TYPE_LENTYPE
+        var len = buf.shiftBE(1 << (type & 0x03)); // 0-3 meaning 1, 2, 4 or 8
         //var len = buf.shiftBE(1 << (type & 0x2)); // 0,2 meaning 1 or 4
         // fall through
-    case 3:     // 11 <tt><xxxx>
+    case 3:     // 11 <tt><xxxx>, TYPE_SHORTLENTYPE
         if (!len) len = type & 0xF; // length 0..15 in the type
         switch ((type & 0x30) >> 4) {
         case 0: return buf.shiftString(len);
@@ -186,7 +186,7 @@ function decodeItem( buf ) {
 // faster to encode to immediate-length types than length-bytes types
 function encodeLength( buf, len, typeC, type8 ) {
     if (len < 256) {
-        (len <= MASK_IMMILEN) ? buf.push(typeC + len) :
+        (len <= MASK_SHORTLEN) ? buf.push(typeC + len) :
         buf.push(type8, len);
     } else {
         if (len < 65536) buf.push(type8 + 1, len >> 8, len);
@@ -204,10 +204,10 @@ function encodeNumber( buf, item ) {
         ieeeFloat.writeDoubleBE(buf.buf, item, buf.end);
         buf.end += 8;
     }
-//    else if (item >= -IMMED_RANGE && item < IMMED_RANGE) {
-//        // encode as an immediate twos-complement integer
-//        buf.push(T_INTC + (item & MASK_IMMEDIATE));
-//    }
+    else if (item >= -IMMED_RANGE && item < IMMED_RANGE) {
+        // encode as an immediate twos-complement integer
+        buf.push(T_INTC + item);
+    }
     else {
         // encode sign and magnitude separately
         var msb, type8 = (item < 0) ? (item = -item, T_NEGINT8) : T_UINT8;
@@ -215,12 +215,12 @@ function encodeNumber( buf, item ) {
             ((item & 0xff00) === 0) ? buf.push(type8, item) : buf.push(type8 + 1, item >> 8, item);
         } else {
             var msb = item / 0x100000000;
-            (item <= 0xffffffff) ? buf.push(type8 + 2, item >> 24, item >> 16, item >> 8, item) :
+            (msb === 0) ? buf.push(type8 + 2, item >> 24, item >> 16, item >> 8, item) :
             (buf.push(type8 + 3, msb >> 24, msb >> 16, msb >> 8, msb), buf.push(item >> 24, item >> 16, item >> item, item));
         }
 /**
         if (item >= -128 && item < 128) {
-            // (item >= -IMMED_RANGE && item < IMMED_RANGE) ? buf.push(T_INTC + (item & MASK_IMMEDIATE)) :
+            // (item >= -IMMED_RANGE && item < IMMED_RANGE) ? buf.push(T_INTC + item) :
             buf.push(T_INT8, item);
         } else {
             if (item >= -32768 && item < 32768) buf.push(T_INT16, item >> 8, item);
