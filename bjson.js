@@ -8,29 +8,6 @@
  * 2023-01-21 - support all length encodings, speed up, start decode
  */
 
-/**
-----------------------------------------------------------------
-README.md
-----------------------------------------------------------------
-
-bxjson -- compact json-like binary serialization
-
-`bxjson` is a binary serialization format very in scope and intent to JSON.
-
-`bxjson` serializes arrays and objects using a variable-length encoding, the end of the data
-can only be determined by traversing the contained elements.
-
-TODO:
-- time optimal utf8 encode/decode tradeoff length
-- time unified vs split encodeLength vs encodeNumber
-- time unified vs split uint/negint types
-- try to use pushbuf in qbson too (instead of calculating size)
-- try new typecodes that put type in 5 lsbitss and omits str16 et al,
-  uses a 1-bit flag for "short" 1- or "long" 4-byte lengths 
-
-----------------------------------------------------------------
-**/
-
 'use strict';
 
 module.exports = {
@@ -38,41 +15,23 @@ module.exports = {
     decode: decode,
 }
 
-var qibl = require('../qibl');
 var ieeeFloat = require('ieee-float');
 var PushBuffer = require('./pushbuf');
 
-/**
-// cf Msgpack, https://github.com/msgpack/msgpack/blob/master/spec.md
-// cf ../qbson/dev/qxpack, which is way too complicated and counts are not obvious
-// null, true, false, int, float, binary, array, object, <pad>
-
-simplifed:
-  // ---- immediate values -32..+31
-  intC                  00sxxxxx
-  // ---- up to 64 fixed-length types:
-* null                  01000000
-* false                 01000010
-* true                  01000011
-* int8                  01000100
-* int16                 01000101
-* int32                 01000110
-* float64               01001111
-  // ---- up to 32 length-counted types:
-* str8, str32           100000xx
-* blob8, blob32         100100xx
-* array8, array32       101000xx
-* object8, object32     101100xx
-  // ---- 4 immediate-length types:
-* strC                  1100xxxx
-* blobC                 1101xxxx
-* arrayC                1110xxxx
-* objectC               1111xxxx
-
-Transport format: a blob32 length-counted blob containing the encoded argument.
-The stored length is the size of the payload; the blob is length + 5 bytes total.
-
-**/
+/*
+ * The typecodes are designed to simplify coding, and are divided into two categories:  fixed-length
+ * types and variable-length types. Fixed-length types designate data whose extents are encoded in
+ * the typecode.  Variable-length types are for data whose extents are stored separately as length
+ * data.  As an optimization, the length of some variable-length data is packed into unused bits in
+ * the typecode.  For transport, prefix the encoded bytes with a 4-byte length.
+ *
+ * Json types: null, true, false, number, string, array, object
+ *
+ * Fixed-length data:  null, undefined, true, false, number
+ * Variable-length data:  string, rawbytes, array, object
+ *
+ * Loosely similar to msgpack, https://github.com/msgpack/msgpack/blob/master/spec.md
+ */
 
 var TYPE_MASK   = 0xC0;
 var TYPE_SHIFT  = 6;
@@ -185,7 +144,7 @@ function decodeItem( buf ) {
         // inlined signed twos-complement integer
         return (type & 0x3F) << 26 >> 26;
     case 1:     // 01 00<tttt>
-        if (type <= 0x4F) switch (type & 0x0F) {
+        switch (type & 0x3F) {
         case 0: return null;
         case 1: return undefined;
         case 2: return false;
@@ -205,7 +164,7 @@ function decodeItem( buf ) {
         //case 13: return -buf.shiftVarint();
         case 14: return ieeeFloat.readFloatBE(buf.buf, (buf.pos += 4) - 4);
         case 15: return ieeeFloat.readDoubleBE(buf.buf, (buf.pos += 8) - 8);
-        } else {
+        default:
             throw new Error(type + ': not supported');
         }
     case 2:     // 10 <tt>00<xx>
@@ -213,8 +172,8 @@ function decodeItem( buf ) {
         //var len = buf.shiftBE(1 << (type & 0x2)); // 0,2 meaning 1 or 4
         // fall through
     case 3:     // 11 <tt><xxxx>
-        len = len ? len : type & 0xF; // length 0..15 in the type
-        switch ((type >>> 4) & 3) {
+        if (!len) len = type & 0xF; // length 0..15 in the type
+        switch ((type & 0x30) >> 4) {
         case 0: return buf.shiftString(len);
         case 1: return buf.shiftBytes(len);
         case 2: return decodeArray(buf, len);
@@ -339,7 +298,7 @@ function encodeBytes( buf, item ) {
 
 var fromBuf = parseFloat(process.versions.node) > '7' ? Buffer.from : Buffer;
 
-var assert = require('assert');
+var qibl = require('../qibl');
 var utf8 = require('utf8');
 var qutf8 = require('q-utf8');
 var qutf8b = require('../qbson/lib/utf8-2');
@@ -365,8 +324,8 @@ var data = "foobar";
 var data = {a:1, b:2, c:3, d:4, e:5};
 var data = {a: 1.5, b: "foo", c: [-1,2e5,3e10], d: true, e: {f: {}}, g: "barbarbarbarbarbarbarbarbarbar"};
 var data = require('./logline.json');
-var data = qibl.populate({}, data , { keys: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'] });
-// var data = qibl.populate(new Array(1000), data);
+//var data = qibl.populate({}, data , { keys: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'] });
+//var data = qibl.populate(new Array(100), data);
 
 //console.log("AR: data", data);
 var x = encode(data);
@@ -397,6 +356,7 @@ console.log("AR: encoded", x1.length, x2.length, x3.length, x4.length);
 console.log("AR: decoded");
 }
 
+var assert = require('assert');
 //assert.deepEqual(qibl.toArray(encode(123)), [T_UINT8, 123]);
 //assert.deepEqual(qibl.toArray(encode(-123)), [T_NEGINT8, 123]);
 //// assert.deepEqual(qibl.toArray(encode([1,2,3])), [T_ARRAYC + 3, T_UINT8, 1, T_UINT8, 2, T_UINT8, 3]);

@@ -1,5 +1,6 @@
 {
-  "name": "bxjson",
+  "name": "bxson",
+  "description": "compact json-like binary serialization",
   "version": "0.0.3",
   "main": "bjson",
 
