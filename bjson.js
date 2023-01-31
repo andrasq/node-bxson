@@ -118,12 +118,13 @@ function encodeItem( buf, item ) {
 
 function decodeItem( buf ) {
     var type = buf.shiftBE(1);
-    switch (type >>> 6) {
-    case 0:     // 00 <xxxxxx>
-        // inlined signed twos-complement integer
-        return (type & 0x3F) << 26 >> 26;
-    case 1:     // 01 00<tttt>, TYPE_FIXTYPE
-        switch (type & 0x3f) {
+    if (!(type & 0x80)) {
+        // fixed-length types
+        if (!(type & 0x40)) {
+            // inlined signed twos-complement integer
+            return (type & 0x3F) << 26 >> 26;
+        }
+        else switch (type & 0x3f) {
         case 0: return null;
         case 1: return undefined;
         case 2: return false;
@@ -143,12 +144,10 @@ function decodeItem( buf ) {
         default:
             throw new Error(type + ': not supported');
         }
-    case 2:     // 10 <tt>00<xx>, TYPE_LENTYPE
-        var len = buf.shiftBE(1 << (type & 0x03)); // 0-3 meaning 1, 2, 4 or 8
-        //var len = buf.shiftBE(1 << (type & 0x2)); // 0,2 meaning 1 or 4
-        // fall through
-    case 3:     // 11 <tt><xxxx>, TYPE_SHORTLENTYPE
-        if (!len) len = type & 0xF; // length 0..15 in the type
+    }
+    else {
+        // variable-length types
+        var len = (type & 0x40) ? (type & MASK_SHORTLEN) : buf.shiftBE(1 << (type & 0x03));
         switch ((type & 0x30) >> 4) {
         case 0: return buf.shiftString(len);
         case 1: return buf.shiftBytes(len);
