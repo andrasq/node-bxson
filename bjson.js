@@ -4,7 +4,7 @@
  * Copyright (C) 2022,2023 Andras Radics
  * Licensed under the Apache License, Version 2.0
  *
- * 2021-12-28 - AR.
+ * 2021-12-28 - Started - AR.
  * 2023-01-21 - support all length encodings, speed up, start decode
  */
 
@@ -20,7 +20,7 @@ var PushBuffer = require('./pushbuf');
 
 /*
  * The typecodes are designed to simplify coding, and are divided into two categories:  fixed-length
- * types and variable-length types. Fixed-length types designate data whose extents are encoded in
+ * types and variable-length types. Fixed-length types designate data whose extents are implied by
  * the typecode.  Variable-length types are for data whose extents are stored separately as length
  * data.  As an optimization, the length of some variable-length data is packed into unused bits in
  * the typecode.  For transport, prefix the encoded bytes with a 4-byte length.
@@ -33,64 +33,43 @@ var PushBuffer = require('./pushbuf');
  * Loosely similar to msgpack, https://github.com/msgpack/msgpack/blob/master/spec.md
  */
 
-var TYPE_MASK   = 0xC0;
-var TYPE_SHIFT  = 6;
+// 00xxxxxx: immediate-value integers -32..31
+var IMMED_RANGE = 32;           // -32 .. 31
+var T_INTI      = 0x00 + 0;     // 00xxxxxx     // 2-s complement signed 6-bit integer -32..31
 
-// 00: immediate-value integers -32..31
-var TYPE_IMMEDIATETYPE = 0x00;
-var MASK_IMMEDIATE = 0x3F;                      // 6 bits signed 2-s complement
-var IMMED_RANGE = (MASK_IMMEDIATE >> 1) + 1;    // -32 .. 31
-var T_INTC      = 0x00 + 0;     // 00xxxxxx     // 2-s complement signed 6-bit integer -32..31
-
-// 01: fixed-length types (64 total)
-// note that the integer types are arranged so that length-16 and -32 are 1 and 2 more than length-8 (mask 0x03)
+// 01xxxxxx: fixed-length types (64 total)
+// nb: integer types are arranged so that length-16 and -32 are 1 and 2 more than length-8
 var TYPE_FIXTYPE = 0x40;
 var TYPE_FIXCODE = 0x3F;
 var T_NULL      = 0x40;         // 01000000
 var T_UNDEFINED = 0x41;         // 01000001
 var T_FALSE     = 0x42;         // 01000010
 var T_TRUE      = 0x43;         // 01000011 = T_FALSE | 1
-var T_UINT8     = 0x44;         // 010001xx
-var T_UINT16    = 0x44 + 1;
-var T_UINT32    = 0x44 + 2;
-var T_UINT64    = 0x44 + 3;
-var T_NEGINT8   = 0x48;         // 010010xx
-var T_NEGINT16  = 0x48 + 1;
-var T_NEGINT32  = 0x48 + 2;
-var T_NEGINT64  = 0x48 + 3;
-var T_INTV      = 0x4C;         // 01001100 experimental positive variable-length int
-var T_NEGINTV   = 0x4D;         // 01001101 experimental negative varint
+var T_UINTB     = 0x44;         // 010001xx
+var T_NEGINTB   = 0x48;         // 010010xx
+var T_VARINT    = 0x4C;         // 01001100 experimental positive variable-length int
+var T_NEGVARINT = 0x4D;         // 01001101 experimental negative varint
 var T_FLOAT32   = 0x4E;         // 01001110
 var T_FLOAT64   = 0x4F;         // 01001111
-// 48 other codes unassigned    // 01tttttt
+// 48 other codes unassigned    // 01{01,10,11}tttt
 
-// 10: indirectly specified length-counted types with length in the following bytes (16 total)
-// note that the length-16 and -32 are always 1 and 2 more than length-8 (mask 0x03)
-var TYPE_LENTYPE = 0x80;
-var MASK_LENCODE = 0x03;
-var T_STR8      = 0x80;         // 10<00>00xx
-var T_STR16     = 0x80 + 1;
-var T_STR32     = 0x80 + 2;
-var T_BYTES8    = 0x90;         // 10<01>00xx
-var T_BYTES16   = 0x90 + 1;
-var T_BYTES32   = 0x90 + 2;
-var T_ARRAY8    = 0xA0;         // 10<10>00xx
-var T_ARRAY16   = 0xA0 + 1;
-var T_ARRAY32   = 0xA0 + 2;
-var T_OBJECT8   = 0xB0;         // 10<11>00xx
-var T_OBJECT16  = 0xB0 + 1;
-var T_OBJECT32  = 0xB0 + 2;
-// 12 other codes unassigned    // 10<tttt>xx
+// 10xxxxxx: indirectly specified length-counted types with length in the following bytes (16 total)
+// 10<tttt><ll> - varlen type length bytes (16 total)
+// 11<tt><llll> - varlen type immediate length (8 total)
+// nb: faster?? to pass two typecodes to encodeType than to or with 0x40
+// nb: 4-bit immediate lengths are 6.5% faster than 3-bit and 9% than 3-bit
+var T_STRINGB   = 0x80;         // 10<00>00xx
+var T_BYTESB    = 0x90;         // 10<01>00xx
+var T_ARRAYB    = 0xA0;         // 10<10>00xx
+var T_OBJECTB   = 0xB0;         // 10<11>00xx
+// 12 other codes unassigned 10<tt{01,10,11}>xx
 
-// 11: directly specified "immediate-length" types (4 total)
-// FIXME: fix the type/mask naming! type_lengthC vs mask_length_type vs mask_length_length
-var MASK_SHORTLENTYPE = 0xF0;
+// 11xxxxxx: directly specified "immediate-length" types (4 total)
 var MASK_SHORTLEN = 0x0F;
-// FIXME: no need for strC, unlikely to have short buffers
-var T_STRC      = 0xC0 + 0;     // 11<00>xxxx
-var T_BYTESC    = 0xD0 + 0;     // 11<01>xxxx
-var T_ARRAYC    = 0xE0 + 0;     // 11<10>xxxx
-var T_OBJECTC   = 0xF0 + 0;     // 11<11>xxxx
+var T_STRINGI   = 0x80 | 0x40;  // 11<00>xxxx
+var T_BYTESI    = 0x90 | 0x40;  // 11<01>xxxx
+var T_ARRAYI    = 0xA0 | 0x40;  // 11<10>xxxx
+var T_OBJECTI   = 0xB0 | 0x40;  // 11<11>xxxx
 
 
 function encode( item ) {
@@ -115,7 +94,7 @@ function encodeItem( buf, item ) {
         case Object:
             // it is faster to walk the keys twice than to call Object.keys
             var len = 0; for (var key in item) len += 1;
-            encodeType(buf, len, T_OBJECTC, T_OBJECT8);
+            encodeType(buf, len, T_OBJECTI, T_OBJECTB);
             for (var key in item) encodeString(buf, key), encodeItem(buf, item[key]);
             break;
         case Array:     encodeArray(buf, item); break;
@@ -149,10 +128,7 @@ function decodeItem( buf ) {
         case 1: return undefined;
         case 2: return false;
         case 3: return true;
-        //case 4: return buf.shiftBE(1) << 24 >> 24;
-        //case 5: return buf.shiftBE(2) << 16 >> 16;
-        //case 6: return buf.shiftBE(4) >> 0;
-        case 4: return buf.shiftBE(1);
+        case 4: return buf.shiftBE(1);  // if signed twos complement then `shiftBE(1) << 24 >> 24` etc
         case 5: return buf.shiftBE(2);
         case 6: return buf.shiftBE(4);
         case 7: return buf.shiftBE(8);
@@ -185,17 +161,17 @@ function decodeItem( buf ) {
 // type16 and type32 can be computed from type8 by adding 1 and 2
 // faster to encode to immediate-length types than length-bytes types
 // faster to split encodeType from encodeLenCode, even if only ever call encodeType
-function encodeLenCode( buf, len, type8 ) {
-    if (len < 256) {
-        buf.push(type8, len);
-    } else {
-        if (len < 65536) buf.push(type8 + 1, len >> 8, len);
-        else buf.push(type8 + 2, len >> 24, len >> 16, len >> 8, len);
-    }
+function encodeType( buf, len, typeI, typeB ) {
+    if (len <= MASK_SHORTLEN) buf.push(typeI + len);
+    else encodeLenCode(buf, len, typeB);
 }
-function encodeType( buf, len, typeC, type8 ) {
-    if (len <= MASK_SHORTLEN) buf.push(typeC + len);
-    else encodeLenCode(buf, len, type8);
+function encodeLenCode( buf, len, typeB ) {
+    if (len < 256) {
+        buf.push(typeB, len);
+    } else {
+        if (len < 65536) buf.push(typeB + 1, len >> 8, len);
+        else buf.push(typeB + 2, len >> 24, len >> 16, len >> 8, len);
+    }
 }
 
 // predefined-length ints are faster to encode and to decode that varints
@@ -207,21 +183,21 @@ function encodeNumber( buf, item ) {
     }
     else if (item >= -IMMED_RANGE && item < IMMED_RANGE) {
         // encode as an immediate twos-complement integer
-        buf.push(T_INTC + item);
+        buf.push(T_INTI + item);
     }
     else {
         // encode sign and magnitude separately
-        var msb, type8 = (item < 0) ? (item = -item, T_NEGINT8) : T_UINT8;
+        var msb, typeB = (item < 0) ? (item = -item, T_NEGINTB) : T_UINTB;
         if (item <= 0xffff) {
-            ((item & 0xff00) === 0) ? buf.push(type8, item) : buf.push(type8 + 1, item >> 8, item);
+            ((item & 0xff00) === 0) ? buf.push(typeB, item) : buf.push(typeB + 1, item >> 8, item);
         } else {
             var msb = item / 0x100000000;
-            (msb === 0) ? buf.push(type8 + 2, item >> 24, item >> 16, item >> 8, item) :
-            (buf.push(type8 + 3, msb >> 24, msb >> 16, msb >> 8, msb), buf.push(item >> 24, item >> 16, item >> item, item));
+            (msb === 0) ? buf.push(typeB + 2, item >> 24, item >> 16, item >> 8, item) :
+            (buf.push(typeB + 3, msb >> 24, msb >> 16, msb >> 8, msb), buf.push(item >> 24, item >> 16, item >> item, item));
         }
 /**
         if (item >= -128 && item < 128) {
-            // (item >= -IMMED_RANGE && item < IMMED_RANGE) ? buf.push(T_INTC + item) :
+            // (item >= -IMMED_RANGE && item < IMMED_RANGE) ? buf.push(T_INTI + item) :
             buf.push(T_INT8, item);
         } else {
             if (item >= -32768 && item < 32768) buf.push(T_INT16, item >> 8, item);
@@ -235,19 +211,19 @@ function encodeNumber( buf, item ) {
 
 function encodeString( buf, item ) {
     var len = PushBuffer.byteLength(item);
-    encodeType(buf, len, T_STRC, T_STR8);
+    encodeType(buf, len, T_STRINGI, T_STRINGB);
     buf.pushString(item, len);
 }
 
 function encodeBytes( buf, item ) {
     var len = item.length;
-    encodeType(buf, len, T_BYTESC, T_BYTES8);
+    encodeType(buf, len, T_BYTESI, T_BYTESB);
     buf.pushBytes(item);
 }
 
 function encodeArray( buf, item ) {
     var len = item.length;
-    encodeType(buf, len, T_ARRAYC, T_ARRAY8);
+    encodeType(buf, len, T_ARRAYI, T_ARRAYB);
     for (var i = 0; i < len; i++) {
         encodeItem(buf, item[i]);
     }
@@ -267,7 +243,7 @@ function encodeObject( buf, item ) {
         // it is faster to walk the keys twice than to call Object.keys
         // but not faster to encodeString() the key
         for (var key in item) len += 1;
-        encodeType(buf, len, T_OBJECTC, T_OBJECT8);
+        encodeType(buf, len, T_OBJECTI, T_OBJECTB);
         for (var key in item) {
             encodeItem(buf, key), encodeItem(buf, item[key]);
         }
@@ -276,7 +252,7 @@ function encodeObject( buf, item ) {
 **/
         // Object.keys runs slow on older node
         var keys = Object.keys(item), len = keys.length;
-        encodeType(buf, len, T_OBJECTC, T_OBJECT8);
+        encodeType(buf, len, T_OBJECTI, T_OBJECTB);
         for (var i = 0; i < keys.length; i++) {
             var key = keys[i];
             encodeItem(buf, key);
@@ -333,7 +309,7 @@ var x = encode(data);
 console.log("AR: encoded as", x);
 //console.log("AR: decoded as", decode(x));
 for (var i=0; i<3; i++) {
-    var x1, x2, x3, x4;
+    var x1, x2, x3, x4, x4b;
     var s = qibl.str_repeat("foo", 100);
     var slen = s.length;
     var target = [];
@@ -348,20 +324,22 @@ console.log("AR:", x);
     timeit(.15, function() { x2 = qbson.encode(data)   });
     timeit(.15, function() { x3 = msgpackjs.pack(data) });
     timeit(.15, function() { x4 = JSON.stringify(data) });
+    timeit(.15, function() { x4b = fromBuf(JSON.stringify(data)) });
 console.log("AR: encoded", x1.length, x2.length, x3.length, x4.length);
 
     timeit(.15, function() { x = decode(x1)           });
     timeit(.15, function() { x = qbson.decode(x2)     });
     timeit(.15, function() { x = msgpackjs.unpack(x3) });
     timeit(.15, function() { x = JSON.parse(x4)       });
+    timeit(.15, function() { x = JSON.parse(x4b)       });
 console.log("AR: decoded");
 }
 
 var assert = require('assert');
-//assert.deepEqual(qibl.toArray(encode(123)), [T_UINT8, 123]);
-//assert.deepEqual(qibl.toArray(encode(-123)), [T_NEGINT8, 123]);
-//// assert.deepEqual(qibl.toArray(encode([1,2,3])), [T_ARRAYC + 3, T_UINT8, 1, T_UINT8, 2, T_UINT8, 3]);
-//assert.deepEqual(qibl.toArray(encode([1,-2,3])), [T_ARRAYC + 3, T_UINTC + 1, T_INTC + 0x3e, T_UINTC + 3]);
+//assert.deepEqual(qibl.toArray(encode(123)), [T_UINTB, 123]);
+//assert.deepEqual(qibl.toArray(encode(-123)), [T_NEGINTB, 123]);
+//// assert.deepEqual(qibl.toArray(encode([1,2,3])), [T_ARRAYI + 3, T_UINTB + 1, T_UINTB + 2, T_UINTB + 3]);
+//assert.deepEqual(qibl.toArray(encode([1,-2,3])), [T_ARRAYI + 3, T_UINTI + 1, T_INTI + 0x3e, T_INTI + 3]);
 
 //
 // 2023-01-21: 55% faster and 25% smaller than JSON.stringify (node-v13.8.0)

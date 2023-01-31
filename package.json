@@ -1,7 +1,7 @@
 {
   "name": "bxson",
   "description": "compact json-like binary serialization",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "main": "bjson",
 
   "scripts": {
