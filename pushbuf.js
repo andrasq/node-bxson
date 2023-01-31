@@ -10,6 +10,8 @@
 var allocBuf = eval('parseFloat(process.versions.node) > 6 ? Buffer.allocUnsafe : Buffer');
 var fromBuf = eval('parseFloat(process.versions.node) > 6 ? Buffer.from : Buffer');
 
+var ieeeFloat = require('ieee-float');
+
 module.exports = PushBuffer;
 
 function PushBuffer( bytes ) {
@@ -79,6 +81,19 @@ PushBuffer.prototype.shiftVarint = function shiftVarint( ) {
     var v = 0, ch, buf = this.buf;
     while ((ch = buf[this.pos]) <= 0x7f) { v = v * 128 + ch; this.pos++ }
     return v;
+}
+
+PushBuffer.prototype.pushFloatBE = function pushFloatBE( v ) {
+    ieeeFloat.writeFloatBE(this.buf, v, (this.end += 4) - 4);
+}
+PushBuffer.prototype.pushDoubleBE = function pushDoubleBE( v ) {
+    ieeeFloat.writeDoubleBE(this.buf, v, (this.end += 8) - 8);
+}
+PushBuffer.prototype.shiftFloatBE = function shiftFloatBE( ) {
+    return ieeeFloat.readFloatBE(this.buf, (this.pos += 4) - 4);
+}
+PushBuffer.prototype.shiftDoubleBE = function shiftDoubleBE( v ) {
+    return ieeeFloat.readDoubleBE(this.buf, (this.pos += 8) - 8);
 }
 
 // Utf8 encoding and byteLength from q-utf8.

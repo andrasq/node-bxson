@@ -15,7 +15,6 @@ module.exports = {
     decode: decode,
 }
 
-var ieeeFloat = require('ieee-float');
 var PushBuffer = require('./pushbuf');
 
 /*
@@ -58,6 +57,7 @@ var T_FLOAT64   = 0x4F;         // 01001111
 // 11<tt><llll> - varlen type immediate length (8 total)
 // nb: faster?? to pass two typecodes to encodeType than to or with 0x40
 // nb: 4-bit immediate lengths are 6.5% faster than 3-bit and 9% than 3-bit
+var MASK_BYTELEN = 0x03;
 var T_STRINGB   = 0x80;         // 10<00>00xx
 var T_BYTESB    = 0x90;         // 10<01>00xx
 var T_ARRAYB    = 0xA0;         // 10<10>00xx
@@ -139,15 +139,15 @@ function decodeItem( buf ) {
         case 11: return -buf.shiftBE(8);
         //case 12: return buf.shiftVarint();
         //case 13: return -buf.shiftVarint();
-        case 14: return ieeeFloat.readFloatBE(buf.buf, (buf.pos += 4) - 4);
-        case 15: return ieeeFloat.readDoubleBE(buf.buf, (buf.pos += 8) - 8);
+        case 14: return buf.shiftFloatBE();
+        case 15: return buf.shiftDoubleBE();
         default:
             throw new Error(type + ': not supported');
         }
     }
     else {
         // variable-length types
-        var len = (type & 0x40) ? (type & MASK_SHORTLEN) : buf.shiftBE(1 << (type & 0x03));
+        var len = (type & 0x40) ? (type & MASK_SHORTLEN) : buf.shiftBE(1 << (type & MASK_BYTELEN));
         switch ((type & 0x30) >> 4) {
         case 0: return buf.shiftString(len);
         case 1: return buf.shiftBytes(len);
@@ -177,8 +177,7 @@ function encodeLenCode( buf, len, typeB ) {
 function encodeNumber( buf, item ) {
     if ((item | 0) !== item || 1/item === -Infinity) {
         buf.push(T_FLOAT64);
-        ieeeFloat.writeDoubleBE(buf.buf, item, buf.end);
-        buf.end += 8;
+        buf.pushDoubleBE(item);
     }
     else if (item >= -IMMED_RANGE && item < IMMED_RANGE) {
         // encode as an immediate twos-complement integer
@@ -284,7 +283,7 @@ var qbson = require('../qbson');
 var msgpackjs = require('msgpackjs') // but fix to return buffers
 var msgpackjs_pack = msgpackjs.pack; msgpackjs.pack = function(v){ return fromBuf(msgpackjs_pack(v)) }
 
-var x = encode({aaa: [1,2,3], b: "ABC"});
+var x = encode({aaa: [1,2,3.5], b: "ABC"});
 // console.log("AR: got", x);
 console.log("AR: decoded to", x.length, decode(x));
 
@@ -335,6 +334,7 @@ console.log("AR: decoded");
 }
 
 var assert = require('assert');
+//assert.deepEqual(qibl.toArray(encode(1.5)), [T_FLOAT64, 0x3f, 0xf8, 0, 0, 0, 0, 0, 0]);
 //assert.deepEqual(qibl.toArray(encode(123)), [T_UINTB, 123]);
 //assert.deepEqual(qibl.toArray(encode(-123)), [T_NEGINTB, 123]);
 //// assert.deepEqual(qibl.toArray(encode([1,2,3])), [T_ARRAYI + 3, T_UINTB + 1, T_UINTB + 2, T_UINTB + 3]);
