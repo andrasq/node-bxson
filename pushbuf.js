@@ -25,9 +25,13 @@ function PushBuffer( bytes ) {
 // a switch() jump table is not as fast as a for loop
 // FIXME: time vs passing single argument and having separate push1, push2, push3, push5 functions
 PushBuffer.prototype.push = function push(/* byte, byte, ... */) {
-    var len = arguments.length, si = 0, buf;
+    var len = arguments.length, buf;
     this._growBuf(len);
     buf = this.buf;
+    for (var i = 0; i < len; i++) buf[this.end++] = arguments[i] & 0xff;
+}
+PushBuffer.prototype.append = function push(/* byte, byte, ... */) {
+    var len = arguments.length, buf = this.buf;
     for (var i = 0; i < len; i++) buf[this.end++] = arguments[i] & 0xff;
 }
 PushBuffer.prototype.poke = function(/* ,varargs */) {
@@ -83,10 +87,12 @@ PushBuffer.prototype.shiftVarint = function shiftVarint( ) {
     return v;
 }
 
-PushBuffer.prototype.pushFloatBE = function pushFloatBE( v ) {
+PushBuffer.prototype.writeFloatBE = function writeFloatBE( v ) {
+    // this._growBuf(4);
     ieeeFloat.writeFloatBE(this.buf, v, (this.end += 4) - 4);
 }
-PushBuffer.prototype.pushDoubleBE = function pushDoubleBE( v ) {
+PushBuffer.prototype.writeDoubleBE = function writeDoubleBE( v ) {
+    // this._growBuf(8);
     ieeeFloat.writeDoubleBE(this.buf, v, (this.end += 8) - 8);
 }
 PushBuffer.prototype.shiftFloatBE = function shiftFloatBE( ) {
@@ -206,6 +212,7 @@ PushBuffer.prototype._growBuf = function _growBuf( n ) {
         if (oldbuf) for (var i = 0; i < oldbuf.length; i++) this.buf[i] = oldbuf[i];
     }
 }
+PushBuffer.prototype.reserve = PushBuffer.prototype._growBuf;
 
 
 /** quicktest:

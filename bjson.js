@@ -176,8 +176,9 @@ function encodeLenCode( buf, len, typeB ) {
 // predefined-length ints are faster to encode and to decode that varints
 function encodeNumber( buf, item ) {
     if ((item | 0) !== item || 1/item === -Infinity) {
-        buf.push(T_FLOAT64);
-        buf.pushDoubleBE(item);
+        buf.reserve(10);
+        buf.append(T_FLOAT64);
+        buf.writeDoubleBE(item);
     }
     else if (item >= -IMMED_RANGE && item < IMMED_RANGE) {
         // encode as an immediate twos-complement integer
