@@ -117,10 +117,10 @@ PushBuffer.prototype.pushString = function pushString(str, len) {
                 buf[ix++] = code;
             } else if (code <= 0x7FF) {
                 buf[ix++] = 0xC0 | (code >> 6); buf[ix++] = 0x80 | code & 0x3f;
-            } else if (code <= 0xD7FF || code >= 0xC000) {
+            } else if (code <= 0xD7FF || code >= 0xE000) {
                 buf[ix++] = 0xE0 | (code >> 12) & 0x0f; buf[ix++] = 0x80 | (code >> 6) & 0x3f; buf[ix++] = 0x80 | code & 0x3f;
-            } else if (code >= 0xD800 && code <= 0xDFFF) {
-                var code2 = string.charCodeAt(i + 1);
+            } else /* (code >= 0xD800 && code <= 0xDFFF) */ {
+                var code2 = str.charCodeAt(i + 1);
                 if (i + 1 < len && code <= 0xDBFF && code2 >= 0xDC00 && code2 <= 0xDFFF) {
                     // valid leading,trailing surrogate pair containing a 20-bit code point
                     var codepoint = 0x10000 + ((code - 0xD800) << 10) + (code2 - 0xDC00);
@@ -130,7 +130,7 @@ PushBuffer.prototype.pushString = function pushString(str, len) {
                     buf[ix++] = 0x80 | (codepoint      ) & 0x3F;
                     i += 1;
                 } else {
-                    // lone leading surrogate or bare trailing surrogate are invalid, become FFFD
+                    // lone leading surrogate or bare trailing surrogate are invalid, become \uFFFD
                     buf[ix++] = 0xEF; buf[ix++] = 0xBF; buf[ix++] = 0xBD;
                 }
             }
@@ -143,7 +143,6 @@ PushBuffer.prototype.shiftString = function shiftString( len ) {
     if (len > 100) {
         return this.buf.toString(undefined, this.pos, this.pos += len)
     } else {
-        var charcodes = [];
         // return decodeUtf8(this.buf, this.pos, this.pos += len);
         // decode utf8 adapted from q-utf8 0.1.4
         var ch, ch2, ch3, ch4, str = "", code, buf = this.buf, base = this.pos, bound = this.pos += len;
@@ -153,16 +152,24 @@ PushBuffer.prototype.shiftString = function shiftString( len ) {
                 str += String.fromCharCode(ch);
             } else if (ch < 0xC0) {
                 str += '\uFFFD'; // invalid multi-byte start (continuation byte)
-            } else if (ch < 0xE0 && (ch2 = buf[i+1]) < 0xC0 && i+1 < bound) {
-                str += String.fromCharCode(((ch & 0x1F) <<  6) + (ch2 & 0x3F)), i += 1;
-            } else if ((ch < 0xF0) && (ch2 = buf[i+1]) < 0xC0 && (ch3 = buf[i+2]) < 0xC0 && i+2 < bound) {
-                str += String.fromCharCode(((ch & 0x0F) << 12) + ((ch2 & 0x3F) << 6) + (ch3 & 0x3F)), i += 2;
-            } else if (ch < 0xF8 && (ch2 = buf[i+1]) < 0xC0 && (ch3 = buf[i+2]) < 0xC0 && (ch4 = buf[i+3]) < 0xC0 && i+3 < bound) {
+            } else if (ch < 0xE0) {
+                ch2 = buf[i+1];
+                str += (i+1 < bound && ch2 < 0xC0)
+                    ? (i += 1, String.fromCharCode(((ch & 0x1F) <<  6) + (ch2 & 0x3F))) : '\uFFFD';
+            } else if (ch < 0xF0) {
+                ch2 = buf[i+1], ch3 = buf[i+2];
+                str += (i+2 < bound && (ch2 | ch3) < 0xC0)
+                    ? (i += 2, String.fromCharCode(((ch & 0x0F) << 12) + ((ch2 & 0x3F) << 6) + (ch3 & 0x3F))) : '\uFFFD';
+            } else if (ch < 0xF8) {
+                ch2 = buf[i+1], ch3 = buf[i+2], ch4 = buf[i+3];
                 var codepoint = ((ch & 0x07) << 18) + ((ch2 & 0x3f) << 12) + ((ch3 & 0x3f) << 6) + (ch4 & 0x3f);
-                return String.fromCharCode(0xD800 + ((codepoint - 0x10000) >> 10))
-                     + String.fromCharCode(0xDC00 + ((codepoint - 0x10000) & 0x3FF));
+                str += (i+3 < bound && (ch2 | ch3 | ch4) < 0xC0)
+                    ? (i += 3, String.fromCharCode(0xD800 + ((codepoint - 0x10000) >> 10)) +
+                               String.fromCharCode(0xDC00 + ((codepoint - 0x10000) & 0x3FF))) : '\uFFFD';
             }
-            else charcodes.push(0xFFFD), str += '\ufffd';
+            else {
+                str += '\uFFFD'; // invalid multi-byte start character (5-, 6-byte utf8 not supported)
+            }
         }
         return str;
     }
