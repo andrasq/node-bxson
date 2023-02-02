@@ -42,48 +42,38 @@ PushBuffer.prototype.poke = function(/* ,varargs */) {
 PushBuffer.prototype.shiftBE = function shiftBE( n ) {
     var val = 0, buf = this.buf;
     switch (n) {
-    case 4: return buf[this.pos++] * 256 + (buf[this.pos++] << 16 | buf[this.pos++] << 8 | buf[this.pos++]);
-    case 3: return buf[this.pos++] << 16 | buf[this.pos++] <<  8 | buf[this.pos++];
+    case 4: return buf[this.pos++] * 256 * 256 * 256 + (buf[this.pos++] << 16 | buf[this.pos++] << 8 | buf[this.pos++]);
     case 2: return buf[this.pos++] <<  8 | buf[this.pos++];
     case 1: return buf[this.pos++];
     default:
         for (var i=0; i<n; i++) { val = val * 256 + buf[this.pos++] }
         return val;
     }
-    return val;
 }
 PushBuffer.prototype.shiftLE = function shiftLE( n ) {
     var val = 0, buf = this.buf;
     switch (n) {
-    case 4: return (buf[this.pos++] | buf[this.pos++] << 8 | buf[this.pos++] << 16) + buf[this.pos++] * 256;
-    case 3: return buf[this.pos++] | buf[this.pos++] << 8 | buf[this.pos++] << 16;
+    case 4: return (buf[this.pos++] | buf[this.pos++] << 8 | buf[this.pos++] << 16) + buf[this.pos++] * 256 * 256 * 256;
     case 2: return buf[this.pos++] | buf[this.pos++] << 8;
     case 1: return buf[this.pos++];
     default:
-        for (var i=n-1; i>=0; i++) { val = val * 256 + buf[this.pos + i] }
-        this.pos += n;
+        var scale = 1;
+        for (var i=0; i<n; i++) { val += buf[this.pos++] * scale; scale *= 256 }
         return val;
-/**
-    case 4: val += buf[this.pos + 3] * 256;
-    case 3: val |= buf[this.pos + 2] << 16;
-    case 2: val |= buf[this.pos + 1] << 8;
-    case 1: val |= buf[this.pos + 0];
-**/
     }
-    this.pos += n;
-    return val;
 }
 
-// little-endian variable-length integer
+// little-endian variable-length integer FIXME: stored in a temp hack storage format
 PushBuffer.prototype.pushVarint = function pushVarint( v ) {
     this._growBuf(10);
     var buf = this.buf;
-    // store explicit zeros
-    do { buf[this.end++] = v & 0x7f; v /= 128 } while (v > 1);
+    while (v >= 128) { buf[this.end++] = v & 0x7f; v /= 128 }
+    buf[this.end++] = v | 0x80;
 }
 PushBuffer.prototype.shiftVarint = function shiftVarint( ) {
-    var v = 0, ch, buf = this.buf;
-    while ((ch = buf[this.pos]) <= 0x7f) { v = v * 128 + ch; this.pos++ }
+    var ch, v = 0, buf = this.buf, scale = 1;
+    while ((ch = buf[this.pos++]) < 128) { v += scale * ch; scale *= 128 }
+    v += scale * (ch & 0x7f);
     return v;
 }
 
@@ -154,16 +144,16 @@ PushBuffer.prototype.shiftString = function shiftString( len ) {
                 str += '\uFFFD'; // invalid multi-byte start (continuation byte)
             } else if (ch < 0xE0) {
                 ch2 = buf[i+1];
-                str += (i+1 < bound && ch2 < 0xC0)
+                str += (i+1 < bound && (ch2 & 0xC0) === 0x80)
                     ? (i += 1, String.fromCharCode(((ch & 0x1F) <<  6) + (ch2 & 0x3F))) : '\uFFFD';
             } else if (ch < 0xF0) {
                 ch2 = buf[i+1], ch3 = buf[i+2];
-                str += (i+2 < bound && (ch2 | ch3) < 0xC0)
+                str += (i+2 < bound && (ch2 & 0xC0) === 0x80 && (ch3 & 0xC0) === 0x80)
                     ? (i += 2, String.fromCharCode(((ch & 0x0F) << 12) + ((ch2 & 0x3F) << 6) + (ch3 & 0x3F))) : '\uFFFD';
             } else if (ch < 0xF8) {
                 ch2 = buf[i+1], ch3 = buf[i+2], ch4 = buf[i+3];
                 var codepoint = ((ch & 0x07) << 18) + ((ch2 & 0x3f) << 12) + ((ch3 & 0x3f) << 6) + (ch4 & 0x3f);
-                str += (i+3 < bound && (ch2 | ch3 | ch4) < 0xC0)
+                str += (i+3 < bound && (ch2 & 0xC0) === 0x80 && (ch3 & 0xC0) === 0x80 && (ch4 & 0xC0) === 0x80)
                     ? (i += 3, String.fromCharCode(0xD800 + ((codepoint - 0x10000) >> 10)) +
                                String.fromCharCode(0xDC00 + ((codepoint - 0x10000) & 0x3FF))) : '\uFFFD';
             }
@@ -177,7 +167,7 @@ PushBuffer.prototype.shiftString = function shiftString( len ) {
 PushBuffer.guessByteLength = function guessByteLength(s) {
     var len = s.length;
     if (len > 100) return Buffer.byteLength(s);
-    for (var i=0; i<s.length; i++) s.charCodeAt(i) > 0x7F ? len += 3 : 0;
+    for (var i=0; i<s.length; i++) s.charCodeAt(i) > 0x7F ? len += 2 : 0;
     return len;
 }
 // string byte length
@@ -191,7 +181,7 @@ PushBuffer.byteLength = function byteLength( s ) {
     for (var code, code2, i = 0; i < s.length; i++) {
         if ((code = s.charCodeAt(i)) > 0x7F) len += 1 + +(code > 0x7FF);
         if (code >= 0xD800 && code < 0xDC00) {
-            if ((code2 = s.charCodeAt(i + 1)) >= 0xDC00 && code2 <= 0xDFFF) { len += 1; i++ }
+            if ((code2 = s.charCodeAt(i + 1)) >= 0xDC00 && code2 <= 0xDFFF) { len += 0; i++ }
         }
     }
     return len;
@@ -199,7 +189,7 @@ PushBuffer.byteLength = function byteLength( s ) {
 
 PushBuffer.prototype.pushBytes = function pushBytes( bytes ) {
     var len = bytes.length;
-    this._growBuf(len);
+    this._growBuf(len + 1);
     for (var buf = this.buf, base = this.end, i = 0; i < len; i++) buf[base + i] = bytes[i];
     this.end += i;
 }
