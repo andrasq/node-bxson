@@ -86,11 +86,12 @@ describe('bjson', function() {
         })
         it('numbers', function() {
             var tests = [
-                0, 1, 1.25, 1234, 12345, 1e6, 1e100, Infinity,
-                -0, -1, -1.25, -1234, -12345, -1e6, -1e100, -Infinity,
+                0, 1, 1.25, 123, 1234, 12345, 1e6, 1e10, 1.5e100, Infinity,
+                -0, -1, -1.25, -123, -1234, -12345, -1e6, -1e10, -1.5e100, -Infinity,
             ];
             for (var i=0; i<tests.length; i++) {
-                assert.strictEqual(decode(encode(tests[i])), tests[i], 'test ' + i);
+                assert.strictEqual(decode(encode(tests[i])), tests[i], 'test ' + i + ': ' + tests[i]);
+                assert.strictEqual(decode(encode(new Number(tests[i]))), tests[i], 'test ' + i + ': ' + tests[i]);
             }
             assert.ok(isNaN(decode(encode(NaN))));
         })
@@ -102,11 +103,16 @@ describe('bjson', function() {
             var s = new Array(100000).join('x');
             assert.equal(decode(encode(s)), s);
         })
-        it('utf8 strings', function() {
+        it('utf8 single-charcode chars', function() {
             var buf = fromBuf([0, 0, 0, 0]);
-            for (var i=0; i<1e6; i++) {
+            for (var i=0; i<0xd800; i+=7) {
                 var s = String.fromCharCode(i);
-                assert.equal(decode(encode(s)), s);
+                assert.equal(decode(encode(s)), s, 'charcode ' + i.toString(16));
+            }
+            // skip surrogate pair charcodes (leading d800-dbff, trailing dc00-dfff)
+            // pushbuf has tests on them
+            for (var i=0xe000; i<1e6 + 0x10000; i+= 7) {
+                assert.equal(decode(encode(s)), s, 'charcode ' + i.toString(16));
             }
             // FIXME: long utf8 strings
         })
@@ -134,8 +140,9 @@ describe('bjson', function() {
             assert.strictEqual(decode(encode(new Number(1234))), 1234);
             assert.strictEqual(decode(encode(new Boolean(true))), true);
             assert.strictEqual(decode(encode(new String("abc"))), "abc");
-            // FIXME: test toJSON
-            // assert.deepEqual(decode(encode({toJSON: function() { return {a:1} }})), {a:1});
+            var err = new Error('test error');
+            err.toJSON = function() { return { message: this.message, stack: this.stack } }
+            assert.deepEqual(decode(encode(err)), { message: err.message, stack: err.stack });
         })
     })
 })

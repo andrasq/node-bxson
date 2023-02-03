@@ -182,7 +182,7 @@ function encodeNumber( buf, item ) {
     }
     else if (item >= -IMMED_RANGE && item < IMMED_RANGE) {
         // encode as an immediate twos-complement integer
-        buf.push(T_INTI + item);
+        buf.push(T_INTI + (item & 0x3f));
     }
     else {
         // encode sign and magnitude separately
@@ -191,8 +191,10 @@ function encodeNumber( buf, item ) {
             ((item & 0xff00) === 0) ? buf.push(typeB, item) : buf.push(typeB + 1, item >> 8, item);
         } else {
             var msb = item / 0x100000000;
-            (msb === 0) ? buf.push(typeB + 2, item >> 24, item >> 16, item >> 8, item) :
-            (buf.push(typeB + 3, msb >> 24, msb >> 16, msb >> 8, msb), buf.push(item >> 24, item >> 16, item >> item, item));
+            (msb < 1) ? buf.push(typeB + 2, item >> 24, item >> 16, item >> 8, item) :
+            /* istanbul ignore next */ // next line never runs, because floats above handle large ints
+            // nb: this code mis-handles 1.5e100, both msb and lsb are 0
+            (buf.push(typeB + 3, msb >> 24, msb >> 16, msb >> 8, msb), buf.push(item >> 24, item >> 16, item >> 8, item));
         }
 /**
         if (item >= -128 && item < 128) {

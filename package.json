@@ -1,12 +1,12 @@
 {
   "name": "bxson",
   "description": "compact json-like binary serialization",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "main": "bjson",
 
   "scripts": {
     "test": "qnit test-*",
-    "coverage": "nyc -r text -r lcov qnit test-*",
+    "coverage": "nyc -r text -r lcov npm test",
     "clean": "rm -rf .nyc_output coverage npm-debug.log"
   }
 }
