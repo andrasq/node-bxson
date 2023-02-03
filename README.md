@@ -1,4 +1,7 @@
-# bxjson
+bxjson
+======
+[![Build Status](https://app.travis-ci.com/andrasq/node-bxson.svg?branch=master)](https://app.travis-ci.com/github/andrasq/node-bxson)
+[![Coverage Status](https://coveralls.io/repos/github/andrasq/node-bxson/badge.svg?branch=master)](https://coveralls.io/github/andrasq/node-bxson?branch=master)
 
 `bxjson` is a binary serialization format similar in scope and intent to JSON.
 It supports only numbers, strings, arrays and hashes (and a few atomic types),
