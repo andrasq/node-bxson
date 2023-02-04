@@ -3,7 +3,7 @@ bxson
 [![Build Status](https://app.travis-ci.com/andrasq/node-bxson.svg?branch=master)](https://app.travis-ci.com/github/andrasq/node-bxson)
 [![Coverage Status](https://coveralls.io/repos/github/andrasq/node-bxson/badge.svg?branch=master)](https://coveralls.io/github/andrasq/node-bxson?branch=master)
 
-`bxjson` is a binary serialization format similar in scope and intent to JSON.
+`bxjson` is a binary data exchange format similar in scope and intent to JSON.
 It supports only numbers, strings, arrays and hashes (and a few atomic types),
 but not RegExp, Date or other non-trivial types.
 
@@ -21,8 +21,11 @@ To run the tests check out the repo.
 
 ### encode( item )
 
-Return a Buffer with the `item` serialized to a sequence of bytes.  Serialization is similar to
-JSON, with some minor differences:
+Return a Buffer with the `item` serialized to a sequence of bytes.  The `item` may be a primitive
+or compound (array, object).  The length of the returned Buffer is the size of the serialized
+item.
+
+Serialization is similar to JSON, with some minor differences:
 
 - unlike JSON, `undefined` values are encoded to `undefined` and not skipped
 - unlike JSON, functions, bigints, Symbols are encoded to `undefined` and not skipped
@@ -39,7 +42,8 @@ JSON, with some minor differences:
 
 ### decode( bytes )
 
-Recover the item that corresponds to the `bytes`.
+Recover the item that corresponds to the `bytes`.  If `bytes` is longer than the encoded item,
+only The first encoded item is decoded and returned.
 
 
 ## Todo
