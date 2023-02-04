@@ -90,6 +90,7 @@ function encodeItem( buf, item ) {
     case 'string':      encodeString(buf, item); break;
     case 'object':
         if (item === null) buf.push(T_NULL);
+        else if (typeof item.toJSON === 'function' && item.constructor !== Buffer) encodeItem(buf, item.toJSON());
         else switch (item.constructor) {
         case Object:
             // it is faster to walk the keys twice than to call Object.keys
@@ -98,13 +99,13 @@ function encodeItem( buf, item ) {
             for (var key in item) encodeString(buf, key), encodeItem(buf, item[key]);
             break;
         case Array:     encodeArray(buf, item); break;
-        case Date:      encodeString(buf, item.toISOString()); break;
+        //case Date:      encodeString(buf, item.toISOString()); break; // has toJSON
         case Buffer:    encodeBytes(buf, item); break;
         case Boolean:
         case Number:
         case String:
                         encodeItem(buf, item.valueOf()); break;
-        default:        item.toJSON ? encodeItem(buf, item.toJSON()) : encodeObject(buf, item); break;
+        default:        encodeObject(buf, item); break;
         }
         break;
     default: // bigint (exception), symbol (undef), function (undef)

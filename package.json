@@ -1,8 +1,11 @@
 {
   "name": "bxson",
-  "description": "compact json-like binary serialization",
+  "description": "fast compact json-like binary serialization",
+  "keywords": ["compact", "fast", "binary", "json"],
   "version": "0.0.5",
   "main": "bjson",
+  "license": "Apache-2.0",
+  "files": ["README.md", "bjson.js", "pushbuf.js"],
 
   "scripts": {
     "test": "qnit test-*",
