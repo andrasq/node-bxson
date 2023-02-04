@@ -69,14 +69,19 @@ describe('pushbuf', function() {
         })
         it('float, double', function() {
             buf.reserve(10);
-            buf.writeFloatBE(1234.5);
+            buf.appendFloatBE(1234.5);
             assert.equal(buf.end, 4);
             assert.equal(ieeeFloat.readFloatBE(buf.buf, 0), 1234.5);
 
             buf.end = 0;
-            buf.writeDoubleBE(1234.5);
+            buf.appendDoubleBE(1234.5);
             assert.equal(buf.end, 8);
             assert.equal(ieeeFloat.readDoubleBE(buf.buf, 0), 1234.5);
+
+            buf.end = 0;
+            buf.pushDoubleBE(123.5);
+            assert.equal(buf.end, 8);
+            assert.equal(ieeeFloat.readDoubleBE(buf.buf, 0), 123.5);
         })
         describe('strings', function() {
             it('uses length hint', function() {
@@ -225,10 +230,10 @@ describe('pushbuf', function() {
         it('floats', function() {
             var buf = new PushBuffer();
             buf.reserve(10);
-            buf.writeDoubleBE(1.5), buf.writeDoubleBE(1.5e10), buf.writeDoubleBE(1.5e100);
+            buf.appendDoubleBE(1.5), buf.appendDoubleBE(1.5e10), buf.appendDoubleBE(1.5e100);
             assert.deepEqual([buf.shiftDoubleBE(), buf.shiftDoubleBE(), buf.shiftDoubleBE()], [1.5, 1.5e10, 1.5e100]);
             buf.end = buf.pos = 0;
-            buf.writeDoubleBE(Infinity), buf.writeDoubleBE(-Infinity);
+            buf.appendDoubleBE(Infinity), buf.appendDoubleBE(-Infinity);
             assert.deepEqual([buf.shiftDoubleBE(), buf.shiftDoubleBE()], [Infinity, -Infinity]);
         })
         it('strings', function() {

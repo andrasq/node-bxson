@@ -77,12 +77,19 @@ PushBuffer.prototype.shiftVarint = function shiftVarint( ) {
     return v;
 }
 
-PushBuffer.prototype.writeFloatBE = function writeFloatBE( v ) {
-    // this._growBuf(4);
+/*
+ * push*() methods grow the buffer, write the data, and update the end
+ * append*() methods write the data and update the end, use reserve() to grow
+ */
+
+PushBuffer.prototype.appendFloatBE = function appendFloatBE( v ) {
     ieeeFloat.writeFloatBE(this.buf, v, (this.end += 4) - 4);
 }
-PushBuffer.prototype.writeDoubleBE = function writeDoubleBE( v ) {
-    // this._growBuf(8);
+PushBuffer.prototype.appendDoubleBE = function appendDoubleBE( v ) {
+    ieeeFloat.writeDoubleBE(this.buf, v, (this.end += 8) - 8);
+}
+PushBuffer.prototype.pushDoubleBE = function pushDoubleBE( v ) {
+    this._growBuf(8);
     ieeeFloat.writeDoubleBE(this.buf, v, (this.end += 8) - 8);
 }
 PushBuffer.prototype.shiftFloatBE = function shiftFloatBE( ) {

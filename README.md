@@ -19,5 +19,6 @@ only be determined by traversing the contained elements.
 
 ## Changelog
 
+0.0.5 - fix integer encoding
 0.0.4 - pushbuf tests
 0.0.3 - published repo

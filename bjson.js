@@ -178,7 +178,7 @@ function encodeNumber( buf, item ) {
     if ((item | 0) !== item || 1/item === -Infinity) {
         buf.reserve(10);
         buf.append(T_FLOAT64);
-        buf.writeDoubleBE(item);
+        buf.appendDoubleBE(item);
     }
     else if (item >= -IMMED_RANGE && item < IMMED_RANGE) {
         // encode as an immediate twos-complement integer
